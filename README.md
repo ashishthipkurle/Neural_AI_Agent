@@ -1,4 +1,4 @@
-# Antigravity Agent
+# My AI Agent
 
 A modular, extensible, local-first autonomous AI agent designed for safety and determinism.
 

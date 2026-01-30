@@ -1,5 +1,0 @@
-
---- Parsed Intents ---
-Action 1: Intent(action='write_file', tool_name='write_file', parameters={'path': 'D:/greetings.txt', 'content': 'welcome Ashish'}, confidence=1.0, reasoning='To create a file with content that can be opened.')
-Action 2: Intent(action='launch_app', tool_name='launch_app', parameters={'app_name': 'notepad', 'extra_args': 'D:/greetings.txt'}, confidence=1.0, reasoning='To open Notepad to write the response directly into a file for future reference.')
-Action 3: Intent(action='read_file', tool_name='read_file', parameters={}, confidence=1.0, reasoning='This might be unnecessarily repeated after user interaction, but in case we need to read the file later for verification.')
