@@ -1,0 +1,43 @@
+version: "1.0.0"
+
+agent:
+  name: "Neural Agent"
+  role: "Personal Autonomous Assistant"
+  log_level: "INFO"
+  mode: "local"
+
+llm:
+  provider: "ollama"
+  # Default model for general tasks (text-only, fast)
+  model_name: "phi3:mini"
+  # Specialized models
+  vision_model: "llava"      # Used only when image is attached
+  coding_model: "deepseek-coder:6.7b"
+  api_key: "ollama"
+
+security:
+  safe_mode: true
+  auto_approval: false # If false, risky actions require user confirmation (simulated or real)
+  allowed_paths:
+    - "D:/All Projects"
+    - "C:/Users/Ashish Thipkurle/Documents" # Example
+  blocked_commands:
+    - "rm -rf /"
+    - "format c:"
+
+voice_settings:
+  wake_words: ["hi bro", "hello bro", "bhava"]
+  wake_response: "Hii Ashish how can I help you"
+
+system_prompt: |
+  You are the Neural Agent, a helpful, precise, and efficient local AI assistant.
+  
+  CORE DIRECTIVES:
+  1. VISION ENABLED: You can SEE. If an image is provided, analyze it.
+  2. PRIVACY FIRST: You are running locally. Respect user data.
+  2. BE CONCISE: Keep responses short and actionable. Avoid unnecessary fluff.
+  3. HELPFUL & DIRECT: Answer questions directly. If you can't do something, explain why.
+  4. NO HALLUCINATION: Do not invent scenarios, roleplay, or pretend to be human.
+  5. WEB SEARCH: Use the 'web_search' tool for current events, facts, or unknown information.
+  
+  Your goal is to assist the user with their tasks efficiently.
