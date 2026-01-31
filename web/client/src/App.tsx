@@ -18,9 +18,12 @@ import {
     Sparkles,
     Maximize2,
     Minimize2,
+    Paperclip,
+    X,
 } from "lucide-react";
 import AIGlobe from "./components/AIGlobe";
 import CodeEditorView from "./components/CodeEditor/CodeEditorView";
+import { api } from "./lib/api";
 
 /* ================= TYPES ================= */
 
@@ -28,8 +31,9 @@ type AIState = "idle" | "listening" | "thinking" | "speaking";
 
 interface Message {
     id: string;
-    role: "user" | "assistant";
+    role: "user" | "assistant" | "system";
     content: string;
+    image?: string;
 }
 
 /* ================= BACKGROUND ================= */
@@ -214,7 +218,7 @@ function HistoryPanel() {
 
 interface CommandFeedProps {
     messages: Message[];
-    onSend: (t: string) => void;
+    onSend: (t: string, image?: string | null) => void;
     isProcessing?: boolean;
 }
 
@@ -224,7 +228,10 @@ function CommandFeed({
     isProcessing = false
 }: CommandFeedProps) {
     const [input, setInput] = useState("");
+    const [attachedImage, setAttachedImage] = useState<string | null>(null);
+    const [imagePreview, setImagePreview] = useState<string | null>(null);
     const listRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Auto-scroll to bottom
     useEffect(() => {
@@ -258,27 +265,96 @@ function CommandFeed({
                 {messages.map((m) => (
                     <div
                         key={m.id}
-                        className={`p-4 rounded-xl ${m.role === 'assistant'
+                        className={`p-3 rounded-xl text-sm ${m.role === 'assistant'
                             ? 'bg-cyan-900/20 border-l-4 border-cyan-500/40'
-                            : 'bg-slate-800/40 border-l-4 border-slate-500/40 ml-8'
+                            : m.role === 'system'
+                                ? 'bg-amber-900/10 border-l-4 border-amber-500/40 italic text-cyan-500/60 text-xs'
+                                : 'bg-slate-800/40 border-l-4 border-slate-500/40 ml-8'
                             }`}
                     >
+                        {m.image && (
+                            <div className="mb-2">
+                                <img src={`data:image/png;base64,${m.image}`} alt="Sent content" className="max-w-full h-auto rounded-lg border border-cyan-500/30 max-h-60 object-contain" />
+                            </div>
+                        )}
                         {m.content}
                     </div>
                 ))}
+                {/* Thinking Indicator */}
+                {isProcessing && (
+                    <div className="p-3 rounded-xl text-sm bg-purple-900/20 border-l-4 border-purple-500/40 flex items-center gap-2">
+                        <span className="text-purple-300">Agent is thinking</span>
+                        <span className="flex gap-1">
+                            <span className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <span className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <span className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </span>
+                    </div>
+                )}
             </div>
 
             <form
                 onSubmit={(e) => {
                     e.preventDefault();
-                    if (!input.trim() || isProcessing) return;
-                    onSend(input);
+                    if ((!input.trim() && !attachedImage) || isProcessing) return;
+                    onSend(input, attachedImage);
                     setInput("");
+                    setAttachedImage(null);
+                    setImagePreview(null);
                 }}
                 className="p-4 border-t border-cyan-500/10"
             >
+                {/* Image Preview */}
+                {imagePreview && (
+                    <div className="mb-3 relative inline-block">
+                        <img
+                            src={imagePreview}
+                            alt="Attached"
+                            className="h-20 rounded-lg border border-cyan-500/30"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setAttachedImage(null);
+                                setImagePreview(null);
+                            }}
+                            className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-400"
+                        >
+                            <X size={12} className="text-white" />
+                        </button>
+                    </div>
+                )}
                 <div className={`flex rounded-xl overflow-hidden border transition-colors ${isProcessing ? 'border-slate-700 opacity-50 cursor-not-allowed' : 'border-cyan-500/30 hover:border-cyan-500/50'
                     }`}>
+                    {/* Hidden File Input */}
+                    <input
+                        type="file"
+                        ref={fileInputRef}
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                                const reader = new FileReader();
+                                reader.onload = (event) => {
+                                    const base64 = (event.target?.result as string)?.split(',')[1];
+                                    setAttachedImage(base64);
+                                    setImagePreview(event.target?.result as string);
+                                };
+                                reader.readAsDataURL(file);
+                            }
+                        }}
+                    />
+                    {/* Attach Button */}
+                    <button
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => fileInputRef.current?.click()}
+                        className={`px-3 flex items-center justify-center transition-colors ${isProcessing ? 'text-slate-600' : 'text-cyan-500/60 hover:text-cyan-400 hover:bg-cyan-500/10'}`}
+                        title="Attach image (chart screenshot)"
+                    >
+                        <Paperclip size={18} />
+                    </button>
                     <input
                         disabled={isProcessing}
                         value={input}
@@ -527,148 +603,15 @@ export default function NeuralInterface() {
             content: "Neural interface initialized. How may I assist you today?",
         },
     ]);
-    const [listening, setListening] = useState(false);
+    const [isMuted, setIsMuted] = useState(false); // Mute toggle for mic button
     const [showCodeEditor, setShowCodeEditor] = useState(false);
     const [audioAnalyzer, setAudioAnalyzer] = useState<AnalyserNode | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
 
-    // Video Ref lifted to parent for capture
-    const videoRef = useRef<HTMLVideoElement>(null);
-
-    // Capture frame from video element
-    const captureFrame = (): string | null => {
-        if (!videoRef.current) {
-            console.error("CAPTURE ERROR: videoRef.current is null");
-            return null;
-        }
-        if (liveFeedMode !== 'camera') {
-            console.error("CAPTURE ERROR: liveFeedMode is not 'camera'");
-            return null;
-        }
-
-        const video = videoRef.current;
-        if (video.videoWidth === 0 || video.videoHeight === 0) {
-            console.error("CAPTURE ERROR: Video dimensions are 0 (stream not ready?)");
-            return null;
-        }
-
-        try {
-            const canvas = document.createElement("canvas");
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const dataUrl = canvas.toDataURL("image/jpeg");
-                console.log(`CAPTURE SUCCESS: Generated frame (${dataUrl.length} chars)`);
-                return dataUrl.split(",")[1];
-            }
-        } catch (e) {
-            console.error("CAPTURE EXCEPTION:", e);
-        }
-        return null;
-    };
-
-    // Command handler with Backend Integration
-    const handleCommand = async (text: string) => {
-        // 1. Update UI with user message immediately
-        const userMsgId = Date.now().toString();
-        setMessages((p) => [...p, { id: userMsgId, role: "user", content: text }]);
-
-        const lower = text.toLowerCase();
-
-        // 2. Local UI overrides for immediate feedback (Visuals)
-        if (lower.includes("scan") || (lower.includes("camera") && !lower.includes("tell me") && !lower.includes("what is"))) {
-            setLiveFeedMode("camera");
-            setTimeout(() => setMessages(p => [...p, { id: Date.now().toString(), role: "assistant", content: "Activating visual scanner..." }]), 500);
-            return;
-        } else if (lower.includes("cctv") || lower.includes("surveillance")) {
-            setLiveFeedMode("cctv");
-            // Don't return! Let the backend process "Start Surveillance" to launch native window
-            setTimeout(() => setMessages(p => [...p, { id: Date.now().toString(), role: "assistant", content: "Initializing neural surveillance grid..." }]), 500);
-        } else if (lower === "stop" || lower === "close" || lower.includes("stop visual")) {
-            setLiveFeedMode("idle");
-            setTimeout(() => setMessages(p => [...p, { id: Date.now().toString(), role: "assistant", content: "Visual feed terminated." }]), 500);
-            return;
-        }
-
-        // 3. Send to Backend API
-        try {
-            // Show a "thinking" message temporarily
-            const processingId = (Date.now() + 1).toString();
-            setMessages(p => [...p, { id: processingId, role: "assistant", content: "Thinking..." }]);
-
-            // CAPTURE IMAGE logic
-            let imageData: string | null = null;
-
-            // Check if user is asking visual question but camera is OFF
-            const isVisualQuery = lower.includes("what") || lower.includes("see") || lower.includes("describe") || lower.includes("holding");
-
-            if (isVisualQuery && liveFeedMode !== 'camera') {
-                setMessages(p => [...p, { id: Date.now().toString(), role: "assistant", content: "Please open the camera first (click the Eye icon)!" }]);
-                return;
-            }
-
-            if (liveFeedMode === 'camera') {
-                imageData = captureFrame();
-                if (!imageData) {
-                    console.warn("Camera is open but failed to capture frame. Check console for details.");
-                    // Inform user of error
-                    setMessages(p => p.map(m => m.id === processingId ? { ...m, content: "⚠️ Error: Camera active but could not capture image. Try refreshing." } : m));
-                    return;
-                }
-            }
-
-            console.log("Sending request to backend...");
-
-            const payload: any = { message: text };
-            if (imageData) {
-                payload.image = imageData;
-            }
-
-            const response = await fetch('http://localhost:8000/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                throw new Error(`API Error: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            console.log("Received response:", data);
-
-            // 4. Update Assistant Response (Replace "Thinking...")
-            setMessages(p => p.map(m =>
-                m.id === processingId
-                    ? { ...m, content: data.response }
-                    : m
-            ));
-
-        } catch (error) {
-            console.error("Agent interaction failed:", error);
-            // Fallback error message in chat
-            setMessages(p => [...p, {
-                id: (Date.now() + 2).toString(),
-                role: "assistant",
-                content: "⚠️ I'm having trouble connecting to my backend brain. Please ensure the Python server (port 8000) is running."
-            }]);
-        }
-    };
-
+    // Auto-start audio analyzer on mount for globe visualization
     useEffect(() => {
-        setAiState(listening ? "listening" : "idle");
-    }, [listening]);
-
-    const toggleListening = async () => {
-        if (listening) {
-            streamRef.current?.getTracks().forEach(t => t.stop());
-            audioContextRef.current?.close();
-            setListening(false);
-            setAudioAnalyzer(null);
-        } else {
+        const startAudio = async () => {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 streamRef.current = stream;
@@ -679,10 +622,319 @@ export default function NeuralInterface() {
                 analyzer.fftSize = 256;
                 audioContextRef.current = audioContext;
                 setAudioAnalyzer(analyzer);
-                setListening(true);
+                console.log('🎙️ Audio analyzer started automatically');
             } catch (err) {
-                console.error('Audio error:', err);
+                console.error('Audio auto-start error:', err);
             }
+        };
+        startAudio();
+
+        return () => {
+            streamRef.current?.getTracks().forEach(t => t.stop());
+            audioContextRef.current?.close();
+        };
+    }, []);
+
+    // Video Ref lifted to parent for capture
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    // NEW: Listen for Synchronized Events from Backend (WebSocket + IPC)
+    useEffect(() => {
+        const handleSync = (data: any) => {
+            console.log("Sync Event Received:", data);
+
+            const { type, role, text, timestamp, partial } = data;
+            const messageId = timestamp || Date.now().toString();
+
+            // Handle UI-specific logic based on text content
+            const lowerText = text?.toLowerCase() || "";
+            if (!partial && (type === "status" || type === "assistant")) {
+                if (lowerText.includes("cctv") || lowerText.includes("surveillance")) {
+                    setLiveFeedMode("cctv");
+                } else if (lowerText.includes("visual scanner") || lowerText.includes("camera feed")) {
+                    setLiveFeedMode("camera");
+                } else if (lowerText.includes("visual feed terminated")) {
+                    setLiveFeedMode("idle");
+                }
+            }
+
+            // Update AI State based on event type
+            if (type === "stt") setAiState("listening");
+            if (type === "status" && lowerText.includes("listening")) setAiState("listening");
+            if (type === "status" && lowerText.includes("processing")) setAiState("thinking");
+            if (type === "status" && lowerText.includes("muted")) setAiState("idle");  // Muted = idle
+            if (type === "assistant") setAiState("speaking");
+            if (type === "status" && text === "Done") setAiState("idle");
+
+            // Handle wake event - clear partial STT messages
+            if (type === "wake") {
+                setMessages(prev => prev.filter(m => m.id !== "partial-stt"));
+                return; // Don't add wake event to chat
+            }
+
+            // Sync Chat history strictly from events
+            if (type === "stt" || type === "assistant" || type === "status" || type === "error") {
+                setMessages((prev) => {
+                    // PARTIAL STT HANDLING
+                    if (type === "stt" && partial) {
+                        if (!text || !text.trim()) return prev;
+
+                        const lastMsg = prev[prev.length - 1];
+                        // If last message is already a partial user message, update it
+                        if (lastMsg && lastMsg.role === "user" && lastMsg.id === "partial-stt") {
+                            return [...prev.slice(0, -1), { ...lastMsg, content: text }];
+                        }
+                        // Otherwise, add a new partial message
+                        return [...prev, { id: "partial-stt", role: "user", content: text }];
+                    }
+
+                    // FINAL STT HANDLING
+                    if (type === "stt" && !partial) {
+                        // Remove any existing partial placeholder
+                        const filtered = prev.filter(m => m.id !== "partial-stt");
+                        // Only add if not duplicate (prevent race conditions with typed input)
+                        if (filtered.length > 0 && filtered[filtered.length - 1].content === text) {
+                            return filtered;
+                        }
+                        return [...filtered, { id: messageId, role: "user", content: text }];
+                    }
+
+                    // ASSISTANT / SYSTEM HANDLING - Filter out internal status messages
+                    if (type === "status") {
+                        const statusLower = text?.toLowerCase() || "";
+
+                        // Handle "Processing..." as a loading indicator
+                        if (statusLower.includes("processing")) {
+                            const withoutLoading = prev.filter(m => m.id !== "loading-indicator" && m.id !== "partial-stt" && m.id !== "listening-indicator");
+                            return [...withoutLoading, {
+                                id: "loading-indicator",
+                                role: "system",
+                                content: "Processing..."
+                            }];
+                        }
+
+                        // Handle "Listening..." as a loading indicator (User Request)
+                        if (statusLower.includes("listening")) {
+                            const withoutListening = prev.filter(m => m.id !== "listening-indicator");
+                            return [...withoutListening, {
+                                id: "listening-indicator",
+                                role: "system",
+                                content: "Listening..."
+                            }];
+                        }
+
+                        // CLEAR INDICATORS ON MUTE
+                        if (statusLower.includes("microphone muted")) {
+                            const cleaned = prev.filter(m => m.id !== "listening-indicator" && m.id !== "loading-indicator" && m.id !== "partial-stt");
+                            return cleaned;
+                        }
+
+                        // Skip these statuses from appearing in chat
+                        if (
+                            text === "Done" ||
+                            statusLower.includes("executing") ||
+                            statusLower.includes("microphone muted") ||
+                            statusLower.includes("microphone active") ||
+                            statusLower.includes("got it") ||
+                            statusLower.includes("understood") ||
+                            statusLower.includes("on it") ||
+                            statusLower.includes("alright") ||
+                            statusLower.includes("sure thing")
+                        ) {
+                            return prev;
+                        }
+
+                        // If role is "assistant" (from speak()), treat it as an assistant message
+                        // This handles greetings/responses that come through on_status
+                        if (role === "assistant") {
+                            const withoutLoading = prev.filter(m => m.id !== "loading-indicator" && m.id !== "listening-indicator");
+
+                            // Duplicate check
+                            if (withoutLoading.length > 0) {
+                                const lastMsg = withoutLoading[withoutLoading.length - 1];
+                                if (lastMsg.content === text) {
+                                    return withoutLoading;
+                                }
+                            }
+
+                            return [...withoutLoading, {
+                                id: messageId,
+                                role: "assistant",
+                                content: text
+                            }];
+                        }
+
+                        // For other system status messages, skip adding them to chat
+                        // (e.g., "Opening notepad", etc. are just status updates)
+                        return prev;
+                    }
+
+                    // For assistant messages, prevent duplicates and remove loading
+                    if (type === "assistant") {
+                        // Remove loading/listening indicators when assistant replies
+                        const withoutLoading = prev.filter(m => m.id !== "loading-indicator" && m.id !== "listening-indicator");
+
+                        // SMART DUPLICATE CHECK: 
+                        // sometimes the same message comes twice with slightly different timestamps.
+                        // We check if the last message has the same content, regardless of role (system vs assistant).
+                        if (withoutLoading.length > 0) {
+                            const lastMsg = withoutLoading[withoutLoading.length - 1];
+                            if (lastMsg.content === text) {
+                                return withoutLoading; // Ignore duplicate content
+                            }
+                        }
+
+                        return [...withoutLoading, {
+                            id: messageId,
+                            role: "assistant",
+                            content: text
+                        }];
+                    }
+
+                    // Default: add as system message (for errors, etc.)
+                    return [...prev, {
+                        id: messageId,
+                        role: "system",
+                        content: text
+                    }];
+                });
+            }
+        };
+
+        // IPC fallback (Electron API)
+        // Now using safe adapter that works in both Web (no-op) and Desktop
+        const ipcCleanup = api.agent.onSync(handleSync);
+
+        // WebSocket connection to Python backend
+        let ws: WebSocket | null = null;
+        let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+
+        const connectWebSocket = () => {
+            try {
+                ws = new WebSocket("ws://localhost:8000/api/ws");
+
+                ws.onopen = () => {
+                    console.log("✅ WebSocket connected to Python backend");
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleSync(data);
+                    } catch (e) {
+                        console.error("WebSocket parse error:", e);
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.log("WebSocket disconnected, reconnecting in 3s...");
+                    reconnectTimeout = setTimeout(connectWebSocket, 3000);
+                };
+
+                ws.onerror = (error) => {
+                    console.error("WebSocket error:", error);
+                };
+            } catch (e) {
+                console.error("WebSocket connection failed:", e);
+                reconnectTimeout = setTimeout(connectWebSocket, 3000);
+            }
+        };
+
+        connectWebSocket();
+
+        return () => {
+            if (ipcCleanup) ipcCleanup();
+            if (ws) ws.close();
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        };
+    }, []);
+
+    // Capture frame from video element
+    const captureFrame = (): string | null => {
+        if (!videoRef.current) return null;
+        if (liveFeedMode !== 'camera') return null;
+
+        const video = videoRef.current;
+        if (video.videoWidth === 0 || video.videoHeight === 0) return null;
+
+        try {
+            const canvas = document.createElement("canvas");
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                return canvas.toDataURL("image/jpeg").split(",")[1];
+            }
+        } catch (e) {
+            console.error("Capture failed:", e);
+        }
+        return null;
+    };
+
+    // Command handler - Pure Sender
+    const handleCommand = async (text: string, attachedImage?: string | null) => {
+        // We explicitly add the user message here if they TYPED it.
+        // If it comes from voice, it will come back via 'stt' sync.
+        const userMsgId = Date.now().toString();
+        const displayContent = attachedImage ? `${text}` : text;
+
+        const newMessage: Message = {
+            id: userMsgId,
+            role: "user",
+            content: displayContent
+        };
+
+        if (attachedImage) {
+            newMessage.image = attachedImage;
+        }
+
+        setMessages((p) => [...p, newMessage]);
+
+        // Immediate UI feedback - Set state to thinking
+        setAiState("thinking");
+
+        try {
+            // Use attached image or capture from camera
+            let imageData: string | null = attachedImage || null;
+            if (!imageData && liveFeedMode === 'camera') {
+                imageData = captureFrame();
+            }
+
+            // Send to Backend
+            const payload: any = { message: text };
+            if (imageData) payload.image = imageData;
+
+            // Trigger command via backend API
+            await fetch('http://localhost:8000/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+        } catch (error) {
+            console.error("Sync interaction failed:", error);
+            setMessages(p => [...p, {
+                id: Date.now().toString(),
+                role: "system",
+                content: "⚠️ Connection lost to Python brain. Terminal interface only."
+            }]);
+        }
+    };
+
+    // Toggle mute via backend API
+    const toggleMute = async () => {
+        const newMutedState = !isMuted;
+        try {
+            await fetch('http://localhost:8000/api/mute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ muted: newMutedState })
+            });
+            setIsMuted(newMutedState);
+            console.log(`🎤 Mic ${newMutedState ? 'MUTED' : 'UNMUTED'}`);
+        } catch (err) {
+            console.error('Mute toggle error:', err);
         }
     };
 
@@ -705,7 +957,7 @@ export default function NeuralInterface() {
                     <CommandFeed
                         messages={messages}
                         onSend={handleCommand}
-                        isProcessing={messages.some(m => m.content === "Thinking...")}
+                        isProcessing={aiState === "thinking" || aiState === "speaking"}
                     />
                 </div>
 
@@ -721,13 +973,22 @@ export default function NeuralInterface() {
                     <div className="relative w-[700px] h-[700px]">
                         {/* Globe Container - No Ring */}
                         <div className="absolute inset-0 rounded-full overflow-hidden">
-                            <AIGlobe audioAnalyzer={audioAnalyzer} />
+                            <AIGlobe audioAnalyzer={audioAnalyzer} aiState={aiState} isMuted={isMuted} />
                         </div>
 
                         {/* Orbiting Buttons - Closer to globe */}
                         <OrbitButton icon={Code} angle={-90} radius={300} onClick={() => setShowCodeEditor(true)} />
                         <OrbitButton icon={Settings} angle={-150} radius={300} />
-                        <OrbitButton icon={Mic} angle={-210} radius={300} active={listening} onClick={toggleListening} />
+                        <OrbitButton
+                            icon={isMuted ? MicOff : Mic}
+                            angle={-210}
+                            radius={300}
+                            active={!isMuted && aiState === "listening"}
+                            onClick={toggleMute}
+                            style={{
+                                opacity: isMuted ? 0.5 : 1
+                            }}
+                        />
                         <OrbitButton icon={Search} angle={-30} radius={300} onClick={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')} />
                         <OrbitButton icon={FolderOpen} angle={30} radius={300} />
                         <OrbitButton icon={Eye} angle={90} radius={300} onClick={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')} />

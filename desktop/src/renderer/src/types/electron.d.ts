@@ -1,11 +1,12 @@
 export interface ElectronAPI {
     terminal: {
-        create: (shell: 'powershell' | 'cmd', cwd?: string) => Promise<string>
-        write: (id: string, data: string) => void
-        resize: (id: string, cols: number, rows: number) => void
-        dispose: (id: string) => void
-        onData: (callback: (id: string, data: string) => void) => void
-        onExit: (callback: (id: string, code: number) => void) => void
+        create: (data: { id: string; cwd: string; shell: 'powershell' | 'cmd' }) => Promise<any>
+        input: (data: { id: string; data: string }) => Promise<any>
+        resize: (data: { id: string; cols: number; rows: number }) => Promise<any>
+        kill: (id: string) => Promise<any>
+        list: () => Promise<string[]>
+        onData: (id: string, callback: (data: string) => void) => () => void
+        onExit: (id: string, callback: (code: number) => void) => () => void
     }
     fs: {
         openFolder: () => Promise<string | null>
@@ -17,6 +18,7 @@ export interface ElectronAPI {
     agent: {
         sendCommand: (text: string, context?: string) => Promise<void>
         onResponse: (callback: (chunk: string, done: boolean) => void) => void
+        onSync: (callback: (data: any) => void) => (() => void)
         cancel: () => void
     }
     system: {

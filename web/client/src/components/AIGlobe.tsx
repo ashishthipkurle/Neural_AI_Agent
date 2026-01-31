@@ -3,21 +3,33 @@ import * as THREE from "three";
 
 interface AIGlobeProps {
   audioAnalyzer?: AnalyserNode | null;
+  aiState?: "idle" | "listening" | "thinking" | "speaking";
+  isMuted?: boolean;
 }
 
-export default function AIGlobe({ audioAnalyzer }: AIGlobeProps) {
+export default function AIGlobe({ audioAnalyzer, aiState = "idle", isMuted = false }: AIGlobeProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const analyzerRef = useRef<AnalyserNode | null>(null);
+  const stateRef = useRef(aiState); // Ref for loop access
+  const isMutedRef = useRef(isMuted); // Ref for mute state in loop
   const materialRef = useRef<THREE.ShaderMaterial | null>(null);
   const globeRef = useRef<THREE.Points | null>(null);
 
   /* =======================
-     KEEP ANALYZER STABLE
+     KEEP REFS STABLE
   ======================= */
   useEffect(() => {
     analyzerRef.current = audioAnalyzer ?? null;
   }, [audioAnalyzer]);
+
+  useEffect(() => {
+    stateRef.current = aiState;
+  }, [aiState]);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
 
   /* =======================
      SCENE SETUP (ONCE)
@@ -67,7 +79,7 @@ export default function AIGlobe({ audioAnalyzer }: AIGlobeProps) {
       const theta = 2 * Math.PI * u;
       const phi = Math.acos(2 * v - 1);
 
-      positions[i * 3]     = RADIUS * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3] = RADIUS * Math.sin(phi) * Math.cos(theta);
       positions[i * 3 + 1] = RADIUS * Math.cos(phi);
       positions[i * 3 + 2] = RADIUS * Math.sin(phi) * Math.sin(theta);
 
@@ -190,13 +202,20 @@ export default function AIGlobe({ audioAnalyzer }: AIGlobeProps) {
     let freqData: Uint8Array | null = null;
     let a = 0, b = 0, m = 0, h = 0;
 
+    // State interpolation
+    const currentStateColor = new THREE.Color("#00c8d4");
+    const targetStateColor = new THREE.Color("#00c8d4");
+
     const clamp = (v: number) => Math.min(Math.max(v, 0), 1);
 
     const animate = () => {
       const t = clock.getElapsedTime();
       const analyzer = analyzerRef.current;
+      const state = stateRef.current;
+      const muted = isMutedRef.current;
 
-      if (analyzer) {
+      // Only process audio if not muted
+      if (analyzer && !muted) {
         // ===== AUDIO ACTIVE =====
         const bins = analyzer.frequencyBinCount;
         if (!freqData || freqData.length !== bins) {
@@ -214,7 +233,7 @@ export default function AIGlobe({ audioAnalyzer }: AIGlobeProps) {
         for (let i = mEnd; i < bins; i++) high += freqData[i];
 
         bass /= bEnd * 255;
-        mid  /= (mEnd - bEnd) * 255;
+        mid /= (mEnd - bEnd) * 255;
         high /= (bins - mEnd) * 255;
 
         const overall = bass * 0.5 + mid * 0.35 + high * 0.15;
@@ -224,22 +243,48 @@ export default function AIGlobe({ audioAnalyzer }: AIGlobeProps) {
         m += (mid - m) * 0.15;
         h += (high - h) * 0.12;
       } else {
-        // ===== MIC OFF → RETURN TO REST =====
-        a += (0 - a) * 0.08;
-        b += (0 - b) * 0.10;
+        // ===== MIC OFF → Activity based on state =====
+
+        // If thinking, simulate processing activity
+        if (state === "thinking") {
+          a += (0.4 - a) * 0.05;
+          b += (0.3 - b) * 0.05;
+        } else if (state === "listening") {
+          // Listening: gentle pulse to show it's active
+          const pulse = Math.sin(t * 3) * 0.15 + 0.2;
+          a += (pulse - a) * 0.1;
+          b += (pulse * 0.8 - b) * 0.1;
+        } else {
+          a += (0 - a) * 0.08;
+          b += (0 - b) * 0.10;
+        }
+
         m += (0 - m) * 0.10;
         h += (0 - h) * 0.10;
       }
 
+      // STATE COLORS - Keep cyan/blue for all states except thinking
+      if (state === "thinking") targetStateColor.set("#a855f7"); // Purple for processing
+      else targetStateColor.set("#00c8d4"); // Cyan for idle, listening, speaking
+
+      currentStateColor.lerp(targetStateColor, 0.05);
+      material.uniforms.uColor.value.copy(currentStateColor);
+      glow.material.color.copy(currentStateColor);
+      innerGlow.material.color.copy(currentStateColor);
+
       material.uniforms.uAudio.value = clamp(a);
-      material.uniforms.uBass.value  = clamp(b);
-      material.uniforms.uMid.value   = clamp(m);
-      material.uniforms.uHigh.value  = clamp(h);
+      material.uniforms.uBass.value = clamp(b);
+      material.uniforms.uMid.value = clamp(m);
+      material.uniforms.uHigh.value = clamp(h);
 
       glow.scale.setScalar(1 + b * 0.12);
       innerGlow.scale.setScalar(1 + a * 0.08);
 
-      globe.rotation.y += 0.0007 + a * 0.002;
+      // ROTATION SPEED
+      let rotationSpeed = 0.0007;
+      if (state === "thinking") rotationSpeed = 0.003; // Moderate spin (was 0.02)
+
+      globe.rotation.y += rotationSpeed + a * 0.002;
       globe.rotation.x += 0.00015 + m * 0.0005;
 
       material.uniforms.uTime.value = t;

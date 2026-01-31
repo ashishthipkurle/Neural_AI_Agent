@@ -60,6 +60,44 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
 
+    // Helper to get project-specific storage key
+    const getProjectHistoryKey = (path: string) => {
+        // Create a safe key from the path
+        const safePath = path.replace(/[\\/:]/g, '_').toLowerCase();
+        return `agent_history_${safePath}`;
+    };
+
+    // Load project-specific agent history
+    const loadProjectHistory = (projectPath: string) => {
+        try {
+            const historyKey = getProjectHistoryKey(projectPath);
+            const saved = localStorage.getItem(historyKey);
+            if (saved) {
+                const history = JSON.parse(saved);
+                setAgentMessages(history);
+                console.log(`Loaded ${history.length} messages for project: ${projectPath}`);
+            } else {
+                // New project - show welcome message
+                setAgentMessages([
+                    { role: 'agent', text: `Hello! I can:\n• Generate new code\n• Explain code\n• Debug & refactor\n\nProject: ${projectPath.split('\\\\').pop() || projectPath}\n\nTry: "create a calculator"` }
+                ]);
+            }
+        } catch (e) {
+            console.error('Failed to load project history:', e);
+        }
+    };
+
+    // Save project-specific agent history
+    const saveProjectHistory = (projectPath: string, messages: { role: 'user' | 'agent'; text: string }[]) => {
+        try {
+            const historyKey = getProjectHistoryKey(projectPath);
+            // Keep last 50 messages per project
+            localStorage.setItem(historyKey, JSON.stringify(messages.slice(-50)));
+        } catch (e) {
+            console.error('Failed to save project history:', e);
+        }
+    };
+
     // Load session from localStorage on mount
     useEffect(() => {
         let sessionLoaded = false;
@@ -69,12 +107,15 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
                 const session = JSON.parse(savedSession);
                 if (session.openFiles) setOpenFiles(session.openFiles);
                 if (session.activeFile) setActiveFile(session.activeFile);
-                if (session.rootPath) setRootPath(session.rootPath);
+                if (session.rootPath) {
+                    setRootPath(session.rootPath);
+                    // Load project-specific agent history
+                    loadProjectHistory(session.rootPath);
+                }
                 if (session.fileTree && session.fileTree.length > 0) {
                     setFileTree(session.fileTree);
                     sessionLoaded = true;
                 }
-                if (session.agentMessages) setAgentMessages(session.agentMessages);
                 console.log('Session restored from localStorage');
             }
         } catch (e) {
@@ -138,10 +179,15 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
             openFiles,
             activeFile,
             rootPath,
-            fileTree,
-            agentMessages: agentMessages.slice(-20) // Keep last 20 messages
+            fileTree
+            // Note: agentMessages now saved per-project separately
         };
         localStorage.setItem('codeEditorSession', JSON.stringify(session));
+
+        // Save agent history for current project
+        if (rootPath) {
+            saveProjectHistory(rootPath, agentMessages);
+        }
     }, [openFiles, activeFile, rootPath, fileTree, agentMessages]);
 
     useEffect(() => {
@@ -154,7 +200,16 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
             // @ts-ignore
             const dirHandle: FileSystemDirectoryHandle = await window.showDirectoryPicker();
             rootHandleRef.current = dirHandle;
+
+            // Save current project history before switching
+            if (rootPath) {
+                saveProjectHistory(rootPath, agentMessages);
+            }
+
             setRootPath(dirHandle.name);
+
+            // Load history for the new project
+            loadProjectHistory(dirHandle.name);
 
             const items: FileNode[] = [];
             // @ts-ignore - entries() is experimental
@@ -561,22 +616,53 @@ Requirements:
             if (matches.length > 0) {
                 const extMap: Record<string, string> = {
                     javascript: 'js', typescript: 'ts', python: 'py',
-                    html: 'html', css: 'css', json: 'json'
+                    html: 'html', css: 'css', json: 'json', jsx: 'jsx', tsx: 'tsx'
                 };
 
-                // Check if this is a modification request
-                const isModificationRequest = userMessage.includes('modify') || userMessage.includes('refine') ||
-                    userMessage.includes('update') || userMessage.includes('change') || userMessage.includes('fix') ||
-                    userMessage.includes('improve') || userMessage.includes('add ');
+                // Better detection for modification requests
+                // Detects: "add X", "update", "modify", "change", "fix", "improve", "in this", "to this file", etc.
+                const modificationKeywords = [
+                    'modify', 'refine', 'update', 'change', 'fix', 'improve',
+                    'add ', 'add a ', 'add the ', 'add to', 'insert',
+                    'in this', 'to this', 'this file', 'this code',
+                    'edit', 'replace', 'remove', 'delete from'
+                ];
+
+                const isModificationRequest = modificationKeywords.some(keyword =>
+                    userMessage.includes(keyword)
+                );
 
                 const currentFileInfo = openFiles.find(f => f.path === activeFile);
 
-                if (isModificationRequest && currentFileInfo && matches.length === 1) {
+                // If there's an active file and user is asking to modify it
+                if (currentFileInfo && matches.length === 1 && isModificationRequest) {
                     // Single code block + modification request = update existing file
                     const code = matches[0][2].trim();
                     updateFileContent(currentFileInfo.path, code);
                     saveFileToBackend(currentFileInfo.path, code);
-                    setAgentMessages(prev => [...prev, { role: 'agent', text: '✅ Updated the current file!' }]);
+                    setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Updated ${currentFileInfo.name}!` }]);
+                } else if (currentFileInfo && matches.length === 1) {
+                    // Even without explicit modification keywords, if there's an active file
+                    // and a single code block of the same language, assume update
+                    const lang = matches[0][1] || 'text';
+                    const currentLang = currentFileInfo.language;
+                    const code = matches[0][2].trim();
+
+                    // Check if languages match (jsx matches javascript, etc.)
+                    const langMatches = lang === currentLang ||
+                        (lang === 'javascript' && (currentLang === 'javascript' || currentLang === 'jsx')) ||
+                        (lang === 'jsx' && currentLang === 'javascript') ||
+                        (lang === 'typescript' && (currentLang === 'typescript' || currentLang === 'tsx'));
+
+                    if (langMatches) {
+                        updateFileContent(currentFileInfo.path, code);
+                        saveFileToBackend(currentFileInfo.path, code);
+                        setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Updated ${currentFileInfo.name}!` }]);
+                    } else {
+                        // Different language - create new file
+                        const ext = extMap[lang] || lang;
+                        createNewFile(`generated.${ext}`, code, lang);
+                    }
                 } else {
                     // Create new file(s) for each code block
                     let fileCount = 0;
@@ -590,7 +676,7 @@ Requirements:
                         if (lang === 'html') filename = 'index';
                         else if (lang === 'css') filename = 'styles';
                         else if (lang === 'python') filename = 'app';
-                        else if (lang === 'javascript' || lang === 'js') filename = 'script';
+                        else if (lang === 'javascript' || lang === 'js' || lang === 'jsx') filename = 'script';
 
                         // Add index if multiple files of same type
                         if (matches.filter(m => (m[1] || 'text') === lang).length > 1) {
@@ -603,6 +689,8 @@ Requirements:
 
                     if (fileCount > 1) {
                         setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Created ${fileCount} files!` }]);
+                    } else if (fileCount === 1) {
+                        setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Created new file!` }]);
                     }
                 }
             }
@@ -777,9 +865,39 @@ Requirements:
                 {/* File Explorer */}
                 {showSidebar && (
                     <div className="w-60 bg-[#0c1624] border-r border-cyan-500/10 flex flex-col shrink-0">
-                        <div className="px-3 py-2 text-xs text-cyan-500/60 font-medium uppercase tracking-wider border-b border-cyan-500/10">Explorer</div>
-                        <div className="flex-1 overflow-y-auto py-1">
-                            {fileTree.length > 0 ? fileTree.map(node => renderNode(node)) : (
+                        <div className="px-3 py-2 text-xs text-cyan-500/60 font-medium uppercase tracking-wider border-b border-cyan-500/10 flex items-center justify-between">
+                            <span>Explorer</span>
+                            <button
+                                onClick={handleSelectFolder}
+                                className="hover:bg-cyan-500/20 p-1 rounded"
+                                title="Open Folder"
+                            >
+                                <FolderOpen size={14} className="text-cyan-500/60" />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto">
+                            {rootPath ? (
+                                <div>
+                                    {/* Folder Name Header */}
+                                    <div
+                                        className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-cyan-500/10 text-xs font-semibold text-white/90 border-b border-cyan-500/5"
+                                    >
+                                        <ChevronDown size={14} className="text-cyan-500/60" />
+                                        <Folder size={14} className="text-cyan-400" />
+                                        <span className="truncate uppercase tracking-wide">
+                                            {rootPath.split('\\').pop() || rootPath.split('/').pop() || 'Folder'}
+                                        </span>
+                                    </div>
+                                    {/* File Tree */}
+                                    <div className="py-1">
+                                        {fileTree.map(node => renderNode(node, 1))}
+                                    </div>
+                                </div>
+                            ) : fileTree.length > 0 ? (
+                                <div className="py-1">
+                                    {fileTree.map(node => renderNode(node))}
+                                </div>
+                            ) : (
                                 <div className="p-4 text-center">
                                     <FolderOpen size={32} className="mx-auto mb-3 text-cyan-500/30" />
                                     <p className="text-cyan-500/40 text-sm">No folder open</p>
@@ -822,8 +940,6 @@ Requirements:
                     <TerminalPanel
                         isOpen={terminalOpen}
                         onToggle={() => setTerminalOpen(!terminalOpen)}
-                        currentFile={currentFile?.path}
-                        workingDirectory={rootPath || 'D:\\All Projects\\My AI Agent\\generated'}
                     />
                 </div>
 
@@ -855,6 +971,6 @@ Requirements:
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }

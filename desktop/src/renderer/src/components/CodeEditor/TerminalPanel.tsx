@@ -5,6 +5,7 @@ import { Terminal as XTerm } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { ChevronUp, ChevronDown, Plus, X, Terminal as TerminalIcon, Lock, Unlock } from "lucide-react";
 import "xterm/css/xterm.css";
+import { api } from "../../lib/api";
 
 type ShellType = "powershell" | "cmd";
 
@@ -23,20 +24,8 @@ interface TerminalPanelProps {
 
 const DEFAULT_CWD = "D:\\All Projects\\My AI Agent\\generated";
 
-// Declare terminalAPI type
-declare global {
-    interface Window {
-        terminalAPI: {
-            create: (data: { id: string; cwd: string; shell: ShellType }) => Promise<any>;
-            input: (data: { id: string; data: string }) => Promise<any>;
-            resize: (data: { id: string; cols: number; rows: number }) => Promise<any>;
-            kill: (id: string) => Promise<any>;
-            list: () => Promise<string[]>;
-            onData: (id: string, callback: (data: string) => void) => () => void;
-            onExit: (id: string, callback: (code: number) => void) => () => void;
-        };
-    }
-}
+// Window declaration removed - using api adapter
+
 
 export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -56,13 +45,13 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
                     setActiveTabId(parsed[0].id);
                     // Recreate PTY sessions for restored tabs
                     parsed.forEach((tab) => {
-                        if (window.terminalAPI) {
-                            window.terminalAPI.create({
+                        parsed.forEach((tab) => {
+                            api.terminal.create({
                                 id: tab.id,
                                 cwd: tab.cwd,
                                 shell: tab.shell,
                             });
-                        }
+                        });
                     });
                 }
             } catch (e) {
@@ -95,22 +84,19 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
         setActiveTabId(id);
 
         // Create PTY session
-        if (window.terminalAPI) {
-            window.terminalAPI.create({
-                id,
-                cwd: DEFAULT_CWD,
-                shell,
-            });
-        }
+        api.terminal.create({
+            id,
+            cwd: DEFAULT_CWD,
+            shell,
+        });
     }, []);
 
     /* ============================ CLOSE TAB ============================ */
 
     const closeTab = useCallback((tabId: string) => {
         // Kill PTY session
-        if (window.terminalAPI) {
-            window.terminalAPI.kill(tabId);
-        }
+        // Kill PTY session
+        api.terminal.kill(tabId);
 
         // Dispose xterm instance
         const instance = termInstances.current.get(tabId);
@@ -190,18 +176,18 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
         fit.fit();
 
         // Subscribe to PTY data
+
+        // Subscribe to PTY data
         let cleanupData = () => { };
         let cleanupExit = () => { };
 
-        if (window.terminalAPI) {
-            cleanupData = window.terminalAPI.onData(activeTabId, (data: string) => {
-                term.write(data);
-            });
+        cleanupData = api.terminal.onData(activeTabId, (data: string) => {
+            term.write(data);
+        });
 
-            cleanupExit = window.terminalAPI.onExit(activeTabId, (code: number) => {
-                term.write(`\r\n\x1b[31m[Process exited with code ${code}]\x1b[0m\r\n`);
-            });
-        }
+        cleanupExit = api.terminal.onExit(activeTabId, (code: number) => {
+            term.write(`\r\n\x1b[31m[Process exited with code ${code}]\x1b[0m\r\n`);
+        });
 
         // Handle user input - respects AI permission
         term.onData((data) => {
@@ -210,16 +196,14 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
                 // Show lock indicator if AI tries to write when locked
                 return;
             }
-            if (window.terminalAPI) {
-                window.terminalAPI.input({ id: activeTabId, data });
-            }
+            api.terminal.input({ id: activeTabId, data });
         });
 
         // Handle resize
         const handleResize = () => {
             fit.fit();
-            if (window.terminalAPI) {
-                window.terminalAPI.resize({
+            if (api.terminal) {
+                api.terminal.resize({
                     id: activeTabId,
                     cols: term.cols,
                     rows: term.rows,
@@ -268,8 +252,8 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
                     <div
                         key={tab.id}
                         className={`flex items-center gap-1.5 px-2 py-1 mr-1 rounded text-xs cursor-pointer group ${activeTabId === tab.id
-                                ? "bg-cyan-500/20 text-cyan-400"
-                                : "text-white/60 hover:bg-white/5"
+                            ? "bg-cyan-500/20 text-cyan-400"
+                            : "text-white/60 hover:bg-white/5"
                             }`}
                         onClick={() => setActiveTabId(tab.id)}
                     >

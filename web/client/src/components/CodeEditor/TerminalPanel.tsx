@@ -1,98 +1,172 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Terminal as XTerm } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
-import {
-    ChevronUp,
-    ChevronDown,
-    X,
-    Terminal as TerminalIcon,
-    Play,
-    Plus,
-} from "lucide-react";
+import { ChevronUp, ChevronDown, Plus, X, Terminal as TerminalIcon, Lock, Unlock } from "lucide-react";
 import "xterm/css/xterm.css";
+import { api } from "../../lib/api";
 
 type ShellType = "powershell" | "cmd";
 
-interface TerminalInstance {
+interface TerminalTab {
     id: string;
     name: string;
-    type: ShellType;
-    term?: XTerm;
-    fitAddon?: FitAddon;
+    shell: ShellType;
     cwd: string;
-    buffer: string;
-    history: string[];
-    historyIndex: number;
+    aiWritable: boolean;
+}
+
+interface TerminalPanelProps {
+    isOpen: boolean;
+    onToggle: () => void;
 }
 
 const DEFAULT_CWD = "D:\\All Projects\\My AI Agent\\generated";
 
-export default function TerminalPanel({
-    isOpen,
-    onToggle,
-    currentFile,
-    workingDirectory,
-}: {
-    isOpen: boolean;
-    onToggle: () => void;
-    currentFile?: string;
-    workingDirectory?: string;
-}) {
+// Window declaration removed - using api adapter
+
+
+export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
-    const [terms, setTerms] = useState<TerminalInstance[]>([]);
-    const [activeId, setActiveId] = useState<string | null>(null);
+    const [tabs, setTabs] = useState<TerminalTab[]>([]);
+    const [activeTabId, setActiveTabId] = useState<string | null>(null);
+    const termInstances = useRef<Map<string, { term: XTerm; fit: FitAddon; cleanup: () => void }>>(new Map());
 
-    /* ---------------------------------- PROMPT ---------------------------------- */
-
-    const prompt = (t: TerminalInstance) =>
-        t.type === "powershell"
-            ? `\x1b[36mPS\x1b[0m \x1b[33m${t.cwd}\x1b[0m\x1b[36m>\x1b[0m `
-            : `\x1b[33m${t.cwd}\x1b[0m\x1b[32m>\x1b[0m `;
-
-    /* ----------------------------- CREATE TERMINAL ------------------------------ */
-
-    const createTerminal = (type: ShellType) => {
-        const id = `term-${Date.now()}`;
-        setTerms((prev) => [
-            ...prev,
-            {
-                id,
-                name: type,
-                type,
-                cwd: workingDirectory || DEFAULT_CWD,
-                buffer: "",
-                history: [],
-                historyIndex: -1,
-            },
-        ]);
-        setActiveId(id);
-    };
+    /* ========================= SESSION RESTORE ========================= */
 
     useEffect(() => {
-        if (isOpen && terms.length === 0) createTerminal("powershell");
-    }, [isOpen]);
+        const saved = localStorage.getItem("terminal-tabs");
+        if (saved) {
+            try {
+                const parsed: TerminalTab[] = JSON.parse(saved);
+                if (parsed.length > 0) {
+                    setTabs(parsed);
+                    setActiveTabId(parsed[0].id);
+                    // Recreate PTY sessions for restored tabs
+                    parsed.forEach((tab) => {
+                        parsed.forEach((tab) => {
+                            api.terminal.create({
+                                id: tab.id,
+                                cwd: tab.cwd,
+                                shell: tab.shell,
+                            });
+                        });
+                    });
+                }
+            } catch (e) {
+                console.error("Failed to restore terminal sessions:", e);
+            }
+        }
+    }, []);
 
-    /* ------------------------------ INIT XTERM ---------------------------------- */
+    // Save tabs to localStorage whenever they change
+    useEffect(() => {
+        const tabData = tabs.map(({ id, name, shell, cwd, aiWritable }) => ({
+            id, name, shell, cwd, aiWritable
+        }));
+        localStorage.setItem("terminal-tabs", JSON.stringify(tabData));
+    }, [tabs]);
+
+    /* =========================== CREATE TAB ============================ */
+
+    const createTab = useCallback((shell: ShellType = "powershell") => {
+        const id = crypto.randomUUID();
+        const newTab: TerminalTab = {
+            id,
+            name: shell === "powershell" ? "PowerShell" : "CMD",
+            shell,
+            cwd: DEFAULT_CWD,
+            aiWritable: true,
+        };
+
+        setTabs((prev) => [...prev, newTab]);
+        setActiveTabId(id);
+
+        // Create PTY session
+        api.terminal.create({
+            id,
+            cwd: DEFAULT_CWD,
+            shell,
+        });
+    }, []);
+
+    /* ============================ CLOSE TAB ============================ */
+
+    const closeTab = useCallback((tabId: string) => {
+        // Kill PTY session
+        // Kill PTY session
+        api.terminal.kill(tabId);
+
+        // Dispose xterm instance
+        const instance = termInstances.current.get(tabId);
+        if (instance) {
+            instance.cleanup();
+            instance.term.dispose();
+            termInstances.current.delete(tabId);
+        }
+
+        setTabs((prev) => {
+            const remaining = prev.filter((t) => t.id !== tabId);
+            if (activeTabId === tabId && remaining.length > 0) {
+                setActiveTabId(remaining[remaining.length - 1].id);
+            } else if (remaining.length === 0) {
+                setActiveTabId(null);
+            }
+            return remaining;
+        });
+    }, [activeTabId]);
+
+    /* ======================= TOGGLE AI PERMISSION ====================== */
+
+    const toggleAiPermission = useCallback((tabId: string) => {
+        setTabs((prev) =>
+            prev.map((t) =>
+                t.id === tabId ? { ...t, aiWritable: !t.aiWritable } : t
+            )
+        );
+    }, []);
+
+    /* ======================== INITIALIZE TERMINAL ====================== */
 
     useEffect(() => {
-        if (!isOpen || !containerRef.current || !activeId) return;
+        if (!isOpen || !containerRef.current || !activeTabId) return;
 
-        const t = terms.find((x) => x.id === activeId);
-        if (!t || t.term) return;
+        const tab = tabs.find((t) => t.id === activeTabId);
+        if (!tab) return;
 
+        // Check if already initialized
+        if (termInstances.current.has(activeTabId)) {
+            // Just show the existing terminal
+            const instance = termInstances.current.get(activeTabId)!;
+            containerRef.current.innerHTML = "";
+            instance.term.open(containerRef.current);
+            instance.fit.fit();
+            return;
+        }
+
+        // Clear container
         containerRef.current.innerHTML = "";
 
+        // Create new xterm instance
         const term = new XTerm({
             fontFamily: "JetBrains Mono, Consolas, monospace",
             fontSize: 13,
             cursorBlink: true,
-            cursorStyle: "bar",
+            cursorStyle: "block",
             theme: {
                 background: "#0a0f1a",
                 foreground: "#e0e0e0",
                 cursor: "#00c8d4",
+                cursorAccent: "#0a0f1a",
+                black: "#0a0f1a",
+                red: "#ff5555",
+                green: "#50fa7b",
+                yellow: "#f1fa8c",
+                blue: "#6272a4",
+                magenta: "#ff79c6",
+                cyan: "#00c8d4",
+                white: "#f8f8f2",
             },
         });
 
@@ -101,193 +175,160 @@ export default function TerminalPanel({
         term.open(containerRef.current);
         fit.fit();
 
-        term.writeln("\x1b[36mNeural Code Editor Terminal\x1b[0m\n");
-        term.write(prompt(t));
+        // Subscribe to PTY data
 
-        term.onKey(({ key, domEvent }) => {
-            handleKey(term, t, key, domEvent);
+        // Subscribe to PTY data
+        let cleanupData = () => { };
+        let cleanupExit = () => { };
+
+        cleanupData = api.terminal.onData(activeTabId, (data: string) => {
+            term.write(data);
         });
 
-        // Handle paste (Ctrl+V)
-        term.attachCustomKeyEventHandler((event) => {
-            if (event.ctrlKey && event.key === "v") {
-                navigator.clipboard.readText().then((text) => {
-                    if (text) {
-                        t.buffer += text;
-                        term.write(text);
-                    }
-                }).catch(() => { });
-                return false;
-            }
-            return true;
+        cleanupExit = api.terminal.onExit(activeTabId, (code: number) => {
+            term.write(`\r\n\x1b[31m[Process exited with code ${code}]\x1b[0m\r\n`);
         });
 
-        setTerms((prev) =>
-            prev.map((x) =>
-                x.id === t.id ? { ...x, term, fitAddon: fit } : x
-            )
-        );
-
-        const resize = () => fit.fit();
-        window.addEventListener("resize", resize);
-        return () => window.removeEventListener("resize", resize);
-    }, [isOpen, activeId, terms]);
-
-    /* ------------------------------ KEY HANDLING -------------------------------- */
-
-    const handleKey = (
-        term: XTerm,
-        t: TerminalInstance,
-        key: string,
-        e: KeyboardEvent
-    ) => {
-        if (e.key === "Enter") {
-            term.write("\r\n");
-            execute(t, term);
-            return;
-        }
-
-        if (e.key === "Backspace") {
-            if (t.buffer.length > 0) {
-                t.buffer = t.buffer.slice(0, -1);
-                term.write("\b \b");
+        // Handle user input - respects AI permission
+        term.onData((data) => {
+            const currentTab = tabs.find((t) => t.id === activeTabId);
+            if (!currentTab?.aiWritable) {
+                // Show lock indicator if AI tries to write when locked
+                return;
             }
-            return;
-        }
+            api.terminal.input({ id: activeTabId, data });
+        });
 
-        if (e.key === "ArrowUp") {
-            if (t.history.length === 0) return;
-            t.historyIndex = Math.max(0, t.historyIndex - 1);
-            replaceLine(term, t, t.history[t.historyIndex]);
-            return;
-        }
-
-        if (e.key === "ArrowDown") {
-            t.historyIndex = Math.min(
-                t.history.length,
-                t.historyIndex + 1
-            );
-            replaceLine(
-                term,
-                t,
-                t.history[t.historyIndex] || ""
-            );
-            return;
-        }
-
-        if (key.length === 1) {
-            t.buffer += key;
-            term.write(key);
-        }
-    };
-
-    const replaceLine = (term: XTerm, t: TerminalInstance, value: string) => {
-        term.write("\x1b[2K\r");
-        term.write(prompt(t));
-        term.write(value);
-        t.buffer = value;
-    };
-
-    /* ------------------------------ EXECUTION ----------------------------------- */
-
-    const execute = async (t: TerminalInstance, term: XTerm) => {
-        const cmd = t.buffer.trim();
-        t.buffer = "";
-        t.history.push(cmd);
-        t.historyIndex = t.history.length;
-
-        if (!cmd) {
-            term.write(prompt(t));
-            return;
-        }
-
-        if (cmd === "cls" || cmd === "clear") {
-            term.clear();
-            term.write(prompt(t));
-            return;
-        }
-
-        if (cmd.startsWith("cd ")) {
-            const path = cmd.slice(3).replace(/"/g, "");
-            t.cwd = path.includes(":") ? path : `${t.cwd}\\${path}`;
-            term.write(prompt(t));
-            return;
-        }
-
-        try {
-            const res = await fetch("http://localhost:8000/api/terminal", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    command: cmd,
-                    cwd: t.cwd,
-                    shell: t.type,
-                }),
-            });
-            const data = await res.json();
-
-            // Write output line by line for proper formatting
-            if (data.output) {
-                const lines = data.output.split('\n');
-                lines.forEach((line: string) => {
-                    term.write('\r\n' + line);
+        // Handle resize
+        const handleResize = () => {
+            fit.fit();
+            if (api.terminal) {
+                api.terminal.resize({
+                    id: activeTabId,
+                    cols: term.cols,
+                    rows: term.rows,
                 });
             }
-            if (data.error) {
-                const errorLines = data.error.split('\n');
-                errorLines.forEach((line: string) => {
-                    term.write('\r\n\x1b[31m' + line + '\x1b[0m');
-                });
-            }
-        } catch {
-            term.write("\r\n\x1b[31mBackend unavailable\x1b[0m");
-        }
+        };
 
-        term.write('\r\n');
-        term.write(prompt(t));
-    };
+        window.addEventListener("resize", handleResize);
+        handleResize();
 
-    /* ---------------------------------- UI ------------------------------------- */
+        // Store instance
+        const cleanup = () => {
+            window.removeEventListener("resize", handleResize);
+            cleanupData();
+            cleanupExit();
+        };
 
-    if (!isOpen)
+        termInstances.current.set(activeTabId, { term, fit, cleanup });
+
+        return () => {
+            window.removeEventListener("resize", handleResize);
+        };
+    }, [activeTabId, isOpen, tabs]);
+
+    /* ================================ UI ================================ */
+
+    if (!isOpen) {
         return (
             <div
                 onClick={onToggle}
-                className="h-8 bg-[#0a0f1a] border-t border-cyan-500/20 flex items-center px-3 cursor-pointer"
+                className="h-8 bg-[#0a0f1a] border-t border-cyan-500/20 flex items-center px-3 cursor-pointer hover:bg-[#0c1624] transition-colors"
             >
                 <TerminalIcon size={14} className="text-cyan-500 mr-2" />
-                <span className="text-xs text-cyan-500">Terminal</span>
+                <span className="text-xs text-cyan-500 font-medium">Terminal</span>
+                <span className="ml-2 text-xs text-cyan-500/50">({tabs.length} tabs)</span>
                 <ChevronUp className="ml-auto text-cyan-500" size={14} />
             </div>
         );
+    }
 
     return (
         <div className="flex flex-col bg-[#0a0f1a] border-t border-cyan-500/20">
-            <div className="h-8 bg-[#0c1624] flex items-center px-2">
-                {terms.map((t) => (
-                    <button
-                        key={t.id}
-                        onClick={() => setActiveId(t.id)}
-                        className={`text-xs px-2 py-1 rounded mr-1 ${activeId === t.id
+            {/* Tab Bar */}
+            <div className="h-8 bg-[#0c1624] flex items-center px-2 border-b border-cyan-500/10 overflow-x-auto">
+                {tabs.map((tab) => (
+                    <div
+                        key={tab.id}
+                        className={`flex items-center gap-1.5 px-2 py-1 mr-1 rounded text-xs cursor-pointer group ${activeTabId === tab.id
                             ? "bg-cyan-500/20 text-cyan-400"
-                            : "text-white/60"
+                            : "text-white/60 hover:bg-white/5"
                             }`}
+                        onClick={() => setActiveTabId(tab.id)}
                     >
-                        {t.name}
-                    </button>
+                        <TerminalIcon size={12} />
+                        <span>{tab.name}</span>
+                        {/* AI Permission Indicator */}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                toggleAiPermission(tab.id);
+                            }}
+                            className="ml-1 opacity-60 hover:opacity-100"
+                            title={tab.aiWritable ? "AI can type (click to lock)" : "AI locked (click to unlock)"}
+                        >
+                            {tab.aiWritable ? (
+                                <Unlock size={10} className="text-green-400" />
+                            ) : (
+                                <Lock size={10} className="text-red-400" />
+                            )}
+                        </button>
+                        {/* Close Button */}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                closeTab(tab.id);
+                            }}
+                            className="ml-1 opacity-0 group-hover:opacity-60 hover:opacity-100"
+                        >
+                            <X size={12} />
+                        </button>
+                    </div>
                 ))}
-                <button
-                    onClick={() => createTerminal("powershell")}
-                    className="ml-auto text-cyan-400"
-                >
-                    <Plus size={14} />
-                </button>
-                <button onClick={onToggle} className="ml-2 text-white/60">
-                    <ChevronDown size={14} />
-                </button>
+
+                {/* New Tab Buttons */}
+                <div className="ml-auto flex items-center gap-1">
+                    <button
+                        onClick={() => createTab("powershell")}
+                        className="p-1 rounded hover:bg-cyan-500/20 text-cyan-400"
+                        title="New PowerShell"
+                    >
+                        <Plus size={14} />
+                    </button>
+                    <button
+                        onClick={() => createTab("cmd")}
+                        className="px-2 py-0.5 rounded hover:bg-cyan-500/20 text-cyan-400 text-[10px]"
+                        title="New CMD"
+                    >
+                        CMD
+                    </button>
+                    <button
+                        onClick={onToggle}
+                        className="ml-2 text-white/60 hover:text-white"
+                    >
+                        <ChevronDown size={14} />
+                    </button>
+                </div>
             </div>
 
-            <div ref={containerRef} className="h-48 p-2" />
+            {/* Terminal Container */}
+            {tabs.length === 0 ? (
+                <div className="h-64 flex items-center justify-center text-cyan-500/50">
+                    <div className="text-center">
+                        <TerminalIcon size={32} className="mx-auto mb-2 opacity-50" />
+                        <p className="text-sm">No terminals open</p>
+                        <button
+                            onClick={() => createTab("powershell")}
+                            className="mt-2 px-3 py-1 bg-cyan-500/20 rounded text-cyan-400 text-sm hover:bg-cyan-500/30"
+                        >
+                            New Terminal
+                        </button>
+                    </div>
+                </div>
+            ) : (
+                <div ref={containerRef} className="h-64 w-full" />
+            )}
         </div>
     );
 }

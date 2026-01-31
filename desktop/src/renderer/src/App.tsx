@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import AIGlobe from "./components/AIGlobe";
 import CodeEditorView from "./components/CodeEditor/CodeEditorView";
+import { api } from "./lib/api";
 
 /* ================= TYPES ================= */
 
@@ -801,11 +802,8 @@ export default function NeuralInterface() {
         };
 
         // IPC fallback (Electron API)
-        const api = (window as any).electronAPI;
-        let ipcCleanup: (() => void) | undefined;
-        if (api && api.agent && api.agent.onSync) {
-            ipcCleanup = api.agent.onSync(handleSync);
-        }
+        // Now using safe adapter that works in both Web (no-op) and Desktop
+        const ipcCleanup = api.agent.onSync(handleSync);
 
         // WebSocket connection to Python backend
         let ws: WebSocket | null = null;
