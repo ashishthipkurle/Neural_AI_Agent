@@ -36,6 +36,9 @@ class IntentParser:
         Parses input using LLM if available, otherwise regex fallback.
         Returns a LIST of intents to execute in order.
         """
+        self.logger.info(f"DEBUG: IntentParser.parse called with: '{user_input}'")
+        print(f"DEBUG: IntentParser.parse called with: '{user_input}'")
+        
         # NUCLEAR OPTION: Hard Switch for Surveillance to bypass ALL refusal logic
         u_lower = user_input.lower()
         if any(k in u_lower for k in ["cctv", "surveillance", "start scan", "activate camera", "monitor"]):
@@ -74,6 +77,34 @@ class IntentParser:
                     confidence=1.0,
                     reasoning="Real-time information keyword detected."
                 )]
+
+
+        # Override for "Search X on Y" (e.g. "search cars on chrome")
+        # This prevents the LLM from hallucinating a search tool for browser launch intents
+        # Override for "Search X on Y" (e.g. "search cars on chrome")
+        # This prevents the LLM from hallucinating a search tool for browser launch intents
+        if "search" in u_lower and (" on " in u_lower or " using " in u_lower):
+             self.logger.info("DEBUG: Search Override Condition Met")
+             print("DEBUG: Search Override Condition Met")
+             
+             # Use lower case for splitting to ensure matches
+             parts_lower = u_lower.split(" on ") if " on " in u_lower else u_lower.split(" using ")
+             
+             if len(parts_lower) >= 2:
+                 # Attempt to split "search cars" -> "cars"
+                 query_part = parts_lower[0].replace("search", "").strip()
+                 app_part = parts_lower[1].replace("browser", "").strip() # e.g. "chrome browser" -> "chrome"
+                 
+                 # Check if the target is a known browser
+                 if any(b in app_part for b in ["chrome", "edge", "firefox", "brave", "opera"]):
+                     url = f"https://www.google.com/search?q={query_part.replace(' ', '+')}"
+                     return [Intent(
+                        action="launch_app", 
+                        tool_name="launch_app", 
+                        parameters={"app_name": app_part, "extra_args": url},
+                        confidence=1.0,
+                        reasoning="User explicitly requested browser search."
+                     )]
 
         if self.llm:
             return self._parse_with_llm(user_input)
@@ -140,6 +171,7 @@ class IntentParser:
         4. IF USER WANTS TO BROWSE:
            - "Search Youtube" -> { "action": "browser_navigate", "parameters": { "url": "https://www.youtube.com" } }
            - "Go to google" -> { "action": "browser_navigate", "parameters": { "url": "google.com" } }
+           - "Search cars on Chrome" -> { "action": "launch_app", "parameters": { "app_name": "chrome", "extra_args": "https://www.google.com/search?q=cars" } }
            - CRITICAL: Do NOT use 'google_search' or 'open_url'. Use 'browser_navigate'.
            
         4. IF USER WANTS VISION/CAMERA:
@@ -351,6 +383,8 @@ class IntentParser:
                     
                 if intents:
                     return intents
+
+
 
         # Simple app launch
         if "launch" in u or "open" in u:

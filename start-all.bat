@@ -16,6 +16,12 @@ if errorlevel 1 (
     echo Ollama already running.
 )
 
+:: Kill existing sessions to prevent port conflicts
+echo [0/3] Cleaning up old processes...
+taskkill /FI "WINDOWTITLE eq Python API Server" /F >NUL 2>&1
+taskkill /FI "WINDOWTITLE eq React Frontend" /F >NUL 2>&1
+timeout /t 2 /nobreak > nul
+
 :: Start Python API server in new window
 echo [2/3] Starting Python API server on port 8000...
 start "Python API Server" cmd /k "cd /d %~dp0 && python agent/api_server.py"

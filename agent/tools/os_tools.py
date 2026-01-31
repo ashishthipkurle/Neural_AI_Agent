@@ -152,7 +152,30 @@ class OSTools:
             "word": "winword.exe"
         }
         
-        target = app_map.get(app_name.lower())
+        # SPECIAL HANDLING: For browsers, try to find full path first to avoid 'start' command argument dropping issues
+        if app_name.lower() in ["chrome", "google chrome"]:
+            full_path = self._find_browser_path("chrome.exe")
+            if full_path:
+                target = full_path
+                # We found the executable, empty out app_map logic for this
+                app_map_target = None 
+            else:
+                target = "chrome.exe" # Fallback
+                app_map_target = None
+        elif app_name.lower() in ["edge", "microsoft edge", "browser"]:
+            full_path = self._find_browser_path("msedge.exe")
+            if full_path:
+                target = full_path
+                app_map_target = None
+            else:
+                target = "msedge.exe"
+                app_map_target = None
+        else:
+             target = None
+             app_map_target = app_map.get(app_name.lower())
+        
+        if app_map_target:
+            target = app_map_target
         
         # If not in hardcoded map, check dynamic index
         if not target:
@@ -194,8 +217,33 @@ class OSTools:
 
         try:
             # Use 'start' to handle both .exe and .lnk files
-            # Quote the target to handle spaces in paths
-            cmd = f'start "" "{target}"{cmd_args}'
+            # For 'start', the first quoted argument is the window title, so we pass an empty title ""
+            # cmd_args is already quoted if needed (e.g. "https://...")
+            
+            if cmd_args:
+                # If we have args, we append them.
+                # NOTE: cmd_args already has a leading space and quotes around the value e.g. ' "http://..."'
+                
+                # OPTIMIZATION: If target is a known executable path (e.g. Chrome/Edge), 
+                # run directly with Popen to avoid 'start' swallowing arguments.
+                # We check for .exe suffix to identify direct executable paths vs shortcuts.
+                if target.lower().endswith(".exe"):
+                    # Strip leading space/quotes from cmd_args to get raw arg
+                    # cmd_args is likely ' "http...""
+                    raw_arg = cmd_args.strip()
+                    if raw_arg.startswith('"') and raw_arg.endswith('"'):
+                        raw_arg = raw_arg[1:-1]
+                    
+                    self.logger.info(f"Direct Popen: '{target}' '{raw_arg}'")
+                    subprocess.Popen([target, raw_arg])
+                    return f"Launched {app_name} directly"
+
+                # Fallback to start
+                cmd = f'start "" "{target}"{cmd_args}'
+            else:
+                cmd = f'start "" "{target}"'
+                
+            self.logger.info(f"Executing: {cmd}")
             subprocess.Popen(cmd, shell=True)
             
             # Wait for app to open (rudimentary fix for typing race condition)
@@ -236,3 +284,15 @@ class OSTools:
         except Exception as e:
             self.logger.error(f"Error resolving Chrome profile: {e}")
             return None
+            
+    def _find_browser_path(self, exe_name: str) -> str:
+        """Finds common browser executables."""
+        paths = [
+            os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), f"Microsoft\\Edge\\Application\\{exe_name}"),
+            os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), f"Microsoft\\Edge\\Application\\{exe_name}"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), f"Google\\Chrome\\Application\\{exe_name}"),
+            os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), f"Google\\Chrome\\Application\\{exe_name}"),
+        ]
+        for p in paths:
+             if os.path.exists(p): return p
+        return None

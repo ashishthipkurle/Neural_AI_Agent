@@ -13,7 +13,7 @@ import logging
 import sys
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -110,6 +110,21 @@ class StatusResponse(BaseModel):
     initialized: bool
     locked: bool
     state: str
+
+class Conversation(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+class Message(BaseModel):
+    id: str
+    role: str
+    content: str
+    timestamp: str
+
+class LoadContextRequest(BaseModel):
+    conversation_id: str
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -307,6 +322,63 @@ async def chat(request: ChatRequest):
             status="error",
             action_taken=None
         )
+
+# ==========================================
+# CHAT HISTORY ENDPOINTS
+# ==========================================
+
+@app.get("/api/conversations", response_model=List[Conversation])
+async def get_conversations():
+    """Get list of recent conversations."""
+    if agent is None or agent._history_manager is None:
+        return []
+    
+    return agent._history_manager.get_conversations()
+
+@app.post("/api/conversations", response_model=Conversation)
+async def create_conversation():
+    """Create a new conversation."""
+    if agent is None or agent._history_manager is None:
+        raise HTTPException(status_code=503, detail="Agent history not initialized")
+    
+    conv_id = agent._history_manager.create_conversation("New Session")
+    # Also switch context immediately
+    await agent.load_context(conv_id)
+    
+    return agent._history_manager.get_conversation(conv_id)
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """Delete a conversation."""
+    if agent is None or agent._history_manager is None:
+        raise HTTPException(status_code=503, detail="Agent history not initialized")
+        
+    agent._history_manager.delete_conversation(conversation_id)
+    return {"status": "success"}
+
+@app.post("/api/conversations/load")
+async def load_conversation(request: LoadContextRequest):
+    """Load context for a specific conversation."""
+    if agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+        
+    success = await agent.load_context(request.conversation_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+        
+    # Return messages so frontend can update UI
+    messages = agent._history_manager.get_messages(request.conversation_id)
+    return {"status": "success", "messages": messages}
+
+@app.get("/api/conversations/{conversation_id}/messages", response_model=List[Message])
+async def get_messages(conversation_id: str):
+    """Get messages for a conversation without switching context."""
+    if agent is None or agent._history_manager is None:
+        return []
+        
+    return agent._history_manager.get_messages(conversation_id)
+
+# ==========================================
 
 
 @app.get("/api/health")

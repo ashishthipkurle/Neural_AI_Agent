@@ -108,7 +108,7 @@ class WebSearchTool:
         
         # Return results
         if not all_results:
-            return "No results found for your query. Please try rephrasing."
+            return "No results found for your query (v2). Please try rephrasing."
             
         return json.dumps(all_results, indent=2)
 

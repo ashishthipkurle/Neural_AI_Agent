@@ -44,6 +44,11 @@ class CommandRouter:
         """Check if the input matches any known fast patterns."""
         u = user_input.lower().strip()
         
+        # EXCEPTION: If input looks like "search X on Y" (browser specific), let IntentParser handle it.
+        # This prevents this simple regex router from stealing complex browser-launch intents.
+        if "search" in u and (" on " in u or " using " in u):
+            return False
+        
         # Check for simple patterns we can handle fast
         if re.search(r"^(open|launch|start)\s+", u):
             return True

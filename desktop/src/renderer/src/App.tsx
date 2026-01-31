@@ -20,6 +20,10 @@ import {
     Minimize2,
     Paperclip,
     X,
+    Plus,
+    MessageSquare,
+    Camera,
+    Trash2,
 } from "lucide-react";
 import AIGlobe from "./components/AIGlobe";
 import CodeEditorView from "./components/CodeEditor/CodeEditorView";
@@ -143,19 +147,85 @@ function StatusHUD({ aiState }: { aiState: AIState }) {
 
 /* ================= HISTORY PANEL ================= */
 
-function HistoryPanel() {
-    const [searchQuery, setSearchQuery] = useState("");
-    const [historyItems] = useState([
-        { id: '1', title: 'System initialization', time: '2 min ago', type: 'system' },
-        { id: '2', title: 'Voice command activated', time: '5 min ago', type: 'voice' },
-        { id: '3', title: 'File search completed', time: '12 min ago', type: 'search' },
-        { id: '4', title: 'Code analysis finished', time: '25 min ago', type: 'code' },
-        { id: '5', title: 'Settings updated', time: '1 hour ago', type: 'settings' },
-    ]);
+/* ================= HISTORY PANEL ================= */
 
-    const filteredHistory = historyItems.filter(item =>
+interface Metrics {
+    tps: number;
+    contextUsed: number;
+    ttft: number;
+    totalLatency: number;
+    vramUsage: number[];
+}
+
+interface Conversation {
+    id: string;
+    title: string;
+    created_at: string;
+    updated_at: string;
+}
+
+interface HistoryPanelProps {
+    metrics: Metrics;
+    onSelectChat: (id: string) => void;
+    onCreateChat: () => void;
+    activeChatId: string | null;
+    onDeleteActiveChat: () => void;
+}
+
+function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDeleteActiveChat }: HistoryPanelProps) {
+    const [activeTab, setActiveTab] = useState<'history' | 'analysis'>('history');
+    const [searchQuery, setSearchQuery] = useState("");
+    const [conversations, setConversations] = useState<Conversation[]>([]);
+
+    const fetchConversations = () => {
+        fetch('http://localhost:8000/api/conversations')
+            .then(res => res.json())
+            .then(data => {
+                if (Array.isArray(data)) {
+                    setConversations(data);
+                } else {
+                    console.error("Invalid history data:", data);
+                    setConversations([]);
+                }
+            })
+            .catch(err => {
+                console.error("Failed to fetch history:", err);
+                setConversations([]);
+            });
+    };
+
+    // Fetch conversations on mount
+    useEffect(() => {
+        fetchConversations();
+    }, []);
+
+    // Refetch when switching TO the history tab, or when asked (via props if we could but here we can just expose refresh)
+    useEffect(() => {
+        if (activeTab === 'history') {
+            fetchConversations();
+        }
+    }, [activeTab, conversations.length]); // Auto refresh if count changes locally (optimistic ui)
+
+    const filteredHistory = conversations.filter(item =>
         item.title.toLowerCase().includes(searchQuery.toLowerCase())
     );
+
+    const handleDelete = async (id: string) => {
+        try {
+            await fetch(`http://localhost:8000/api/conversations/${id}`, {
+                method: 'DELETE',
+            });
+            // Update local list instantly
+            setConversations(prev => prev.filter(c => c.id !== id));
+
+            // If deleting active chat, notify parent
+            if (id === activeChatId) {
+                onDeleteActiveChat();
+            }
+        } catch (e) {
+            console.error("Delete chat error", e);
+        }
+    };
 
     return (
         <div
@@ -166,48 +236,174 @@ function HistoryPanel() {
                 backdropFilter: "blur(10px)",
             }}
         >
-            <div className="px-4 py-3 flex items-center gap-2">
-                <div className="w-2.5 h-2.5 bg-emerald-400 rounded-full" />
-                <span className="text-base font-medium text-white">History</span>
-                <Clock size={16} className="ml-auto text-cyan-500/40" />
+            {/* Tab Header */}
+            <div className="px-2 py-2 flex items-center gap-1 border-b border-cyan-500/20">
+                <button
+                    onClick={() => setActiveTab('history')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'history'
+                        ? 'bg-cyan-500/20 text-cyan-300 shadow-[0_0_10px_rgba(0,180,200,0.2)]'
+                        : 'text-cyan-500/50 hover:text-cyan-400 hover:bg-cyan-500/5'
+                        }`}
+                >
+                    History
+                </button>
+                <button
+                    onClick={() => setActiveTab('analysis')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'analysis'
+                        ? 'bg-cyan-500/20 text-cyan-300 shadow-[0_0_10px_rgba(0,180,200,0.2)]'
+                        : 'text-cyan-500/50 hover:text-cyan-400 hover:bg-cyan-500/5'
+                        }`}
+                >
+                    Analysis
+                </button>
             </div>
 
-            {/* Search Box */}
-            <div className="px-4 pb-3">
-                <div className="flex rounded-lg overflow-hidden border border-cyan-500/30"
-                    style={{ background: "rgba(0,30,45,0.5)" }}>
-                    <Search size={14} className="ml-3 my-auto text-cyan-500/50" />
-                    <input
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search..."
-                        className="flex-1 px-2 py-2 bg-transparent text-cyan-100 text-sm focus:outline-none"
-                    />
-                </div>
-            </div>
+            {/* CONTENT AREA */}
+            <div className="flex-1 overflow-hidden flex flex-col relative">
 
-            {/* History Items - Scrollable */}
-            <div className="flex-1 px-4 pb-4 space-y-2 overflow-y-auto">
-                {filteredHistory.map((item) => (
-                    <div
-                        key={item.id}
-                        className="p-2.5 rounded-lg flex items-center gap-2.5 cursor-pointer hover:bg-cyan-500/10 transition-colors"
-                        style={{
-                            background: "rgba(0,30,45,0.3)",
-                        }}
+                {/* === HISTORY VIEW === */}
+                {activeTab === 'history' && (
+                    <motion.div
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex-1 flex flex-col min-h-0"
                     >
-                        <div className={`w-2 h-2 rounded-full ${item.type === 'system' ? 'bg-cyan-400' :
-                            item.type === 'voice' ? 'bg-green-400' :
-                                item.type === 'search' ? 'bg-yellow-400' :
-                                    item.type === 'code' ? 'bg-purple-400' :
-                                        'bg-gray-400'
-                            }`} />
-                        <div className="flex-1 min-w-0">
-                            <div className="text-sm text-cyan-100 truncate">{item.title}</div>
-                            <div className="text-xs text-cyan-500/50">{item.time}</div>
+                        {/* Header & New Chat */}
+                        <div className="px-4 py-3 flex items-center gap-2 justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="text-base font-medium text-white">Recent Chats</span>
+                            </div>
+                            <button
+                                onClick={onCreateChat}
+                                className="p-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/40 text-cyan-300 transition-colors flex items-center gap-1 text-xs"
+                            >
+                                <Plus size={14} />
+                                New Chat
+                            </button>
                         </div>
-                    </div>
-                ))}
+
+                        {/* Search Box */}
+                        <div className="px-4 pb-3">
+                            <div className="flex rounded-lg overflow-hidden border border-cyan-500/30"
+                                style={{ background: "rgba(0,30,45,0.5)" }}>
+                                <Search size={14} className="ml-3 my-auto text-cyan-500/50" />
+                                <input
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    placeholder="Search history..."
+                                    className="flex-1 px-2 py-2 bg-transparent text-cyan-100 text-sm focus:outline-none"
+                                />
+                            </div>
+                        </div>
+
+                        {/* History Items - Scrollable */}
+                        <div className="flex-1 px-4 pb-4 space-y-2 overflow-y-auto">
+                            {filteredHistory.map((item) => (
+                                <div
+                                    key={item.id}
+                                    onClick={() => onSelectChat(item.id)}
+                                    className={`group relative p-2.5 rounded-lg flex items-center gap-2.5 cursor-pointer transition-all border ${activeChatId === item.id
+                                        ? 'bg-cyan-500/20 border-cyan-500/50 shadow-[0_0_10px_rgba(0,200,255,0.2)]'
+                                        : 'bg-transparent border-transparent hover:bg-cyan-500/10'
+                                        }`}
+                                >
+                                    <div className="w-8 h-8 rounded-full bg-cyan-900/50 flex items-center justify-center border border-cyan-500/20 text-cyan-400">
+                                        <MessageSquare size={14} />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm text-cyan-100 truncate">{item.title || "New Chat"}</div>
+                                        <div className="text-xs text-cyan-500/50">{new Date(item.updated_at).toLocaleString()}</div>
+                                    </div>
+
+                                    {/* Delete Button - Visible on Hover */}
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDelete(item.id);
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-md hover:bg-red-500/20 text-red-400 transition-all absolute right-2"
+                                        title="Delete Conversation"
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </motion.div>
+                )}
+
+                {/* === ANALYSIS VIEW === */}
+                {activeTab === 'analysis' && (
+                    <motion.div
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex-1 flex flex-col p-4 space-y-4 overflow-y-auto"
+                    >
+                        {/* Metric: Tokens Per Second */}
+                        <div className="p-4 rounded-xl border border-cyan-500/20 bg-cyan-900/10">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-cyan-500/60 text-xs font-mono tracking-wider">THROUGHPUT</span>
+                                <Activity size={14} className="text-cyan-400" />
+                            </div>
+                            <div className="flex items-end gap-2">
+                                <span className="text-3xl font-bold text-white">{metrics.tps.toFixed(1)}</span>
+                                <span className="text-sm text-cyan-500/60 mb-1">t/s</span>
+                            </div>
+                            <div className="mt-3 h-1.5 w-full bg-cyan-900/40 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-cyan-400 rounded-full shadow-[0_0_10px_rgba(0,200,255,0.5)] transition-all duration-500"
+                                    style={{ width: `${Math.min(100, (metrics.tps / 100) * 100)}%` }}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Metric: Context Window */}
+                        <div className="p-4 rounded-xl border border-purple-500/20 bg-purple-900/10">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-purple-400/60 text-xs font-mono tracking-wider">CONTEXT USE</span>
+                                <Cpu size={14} className="text-purple-400" />
+                            </div>
+                            <div className="flex items-end gap-2">
+                                <span className="text-3xl font-bold text-white">{(metrics.contextUsed / 1000).toFixed(1)}</span>
+                                <span className="text-sm text-purple-400/60 mb-1">k tokens</span>
+                            </div>
+                            <div className="mt-3 h-1.5 w-full bg-purple-900/40 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-purple-400 rounded-full shadow-[0_0_10px_rgba(180,100,255,0.5)] transition-all duration-500"
+                                    style={{ width: `${Math.min(100, (metrics.contextUsed / 32000) * 100)}%` }}
+                                />
+                            </div>
+                            <div className="mt-2 text-[10px] text-purple-400/40 text-right">Limit: 32k</div>
+                        </div>
+
+                        {/* Metric: Latency Grid */}
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="p-3 rounded-xl border border-cyan-500/20 bg-cyan-900/10">
+                                <div className="text-[10px] text-cyan-500/50 mb-1">TTFT</div>
+                                <div className="text-xl font-bold text-white">{metrics.ttft.toFixed(2)}s</div>
+                            </div>
+                            <div className="p-3 rounded-xl border border-cyan-500/20 bg-cyan-900/10">
+                                <div className="text-[10px] text-cyan-500/50 mb-1">TOTAL</div>
+                                <div className="text-xl font-bold text-white">{metrics.totalLatency.toFixed(2)}s</div>
+                            </div>
+                        </div>
+
+                        {/* Mock Memory Graph */}
+                        <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-900/10 flex-1 min-h-[120px] flex flex-col">
+                            <div className="flex items-center justify-between mb-4">
+                                <span className="text-emerald-500/60 text-xs font-mono tracking-wider">VRAM USAGE</span>
+                                <div className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px]">SUCCESS</div>
+                            </div>
+                            <div className="flex-1 flex items-end gap-1 px-1">
+                                {metrics.vramUsage.map((h, i) => (
+                                    <div key={i} className="flex-1 bg-emerald-500/30 rounded-t-sm transition-all hover:bg-emerald-400" style={{ height: `${h}%` }} />
+                                ))}
+                            </div>
+                        </div>
+
+                    </motion.div>
+                )}
+
             </div>
         </div>
     );
@@ -596,6 +792,7 @@ function LiveFeedPanel({ mode = "idle", videoRef }: LiveFeedPanelProps) {
 export default function NeuralInterface() {
     const [aiState, setAiState] = useState<AIState>("idle");
     const [liveFeedMode, setLiveFeedMode] = useState<"idle" | "camera" | "cctv">("idle"); // State for live feed
+    const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([
         {
             id: "1",
@@ -608,6 +805,73 @@ export default function NeuralInterface() {
     const [audioAnalyzer, setAudioAnalyzer] = useState<AnalyserNode | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+
+    // Metrics State (Dynamic)
+    const [metrics, setMetrics] = useState<Metrics>({
+        tps: 0,
+        contextUsed: 0,
+        ttft: 0,
+        totalLatency: 0,
+        vramUsage: [30, 40, 35, 50, 45, 60, 55, 70, 65, 50, 40, 30] // Initial dummy data
+    });
+
+    // Simulated Metrics Update (Replace with real event listener later)
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setMetrics(prev => {
+                // Simulate fluctuation
+                const newTps = 45 + Math.random() * 10;
+                const newContext = Math.min(32000, prev.contextUsed + (Math.random() > 0.8 ? 500 : 0)); // Occasional jump
+                const newVram = [...prev.vramUsage.slice(1), 30 + Math.random() * 50];
+
+                return {
+                    ...prev,
+                    tps: newTps,
+                    contextUsed: newContext,
+                    ttft: 0.3 + Math.random() * 0.2, // 0.3 - 0.5s
+                    totalLatency: 1.0 + Math.random() * 0.5, // 1.0 - 1.5s
+                    vramUsage: newVram
+                };
+            });
+        }, 2000); // Update every 2 seconds
+
+        return () => clearInterval(interval);
+    }, []);
+
+    // Load initial chat on mount if needed
+    useEffect(() => {
+        // Here we could fetch the latest conversation, or just start fresh
+    }, []);
+
+    const createChat = async () => {
+        try {
+            const res = await fetch('http://localhost:8000/api/conversations', { method: 'POST' });
+            const data = await res.json();
+            setActiveConversationId(data.id);
+            setMessages([]); // Start fresh
+        } catch (e) {
+            console.error("Create chat error", e);
+        }
+    };
+
+    const loadChat = async (id: string) => {
+        try {
+            setActiveConversationId(id);
+            const res = await fetch('http://localhost:8000/api/conversations/load', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conversation_id: id })
+            });
+            const data = await res.json();
+            if (data.messages) {
+                setMessages(data.messages);
+            }
+        } catch (e) {
+            console.error("Load chat error", e);
+        }
+    };
+
+
 
     // Auto-start audio analyzer on mount for globe visualization
     useEffect(() => {
@@ -946,19 +1210,30 @@ export default function NeuralInterface() {
                 <StatusHUD aiState={aiState} />
 
                 {/* LEFT EDGE - History Panel (full height) */}
-                <div className="fixed left-0 top-14 bottom-0 z-20 w-[280px] p-4">
+                <div className="fixed left-0 top-14 bottom-0 z-20 w-[480px] p-4">
                     <div className="h-full">
-                        <HistoryPanel />
+                        <HistoryPanel
+                            metrics={metrics}
+                            activeChatId={activeConversationId}
+                            onSelectChat={loadChat}
+                            onCreateChat={createChat}
+                            onDeleteActiveChat={() => {
+                                setActiveConversationId(null);
+                                setMessages([]);
+                            }}
+                        />
                     </div>
                 </div>
 
-                {/* BOTTOM - Command Feed (next to history) */}
-                <div className="fixed left-[300px] bottom-6 z-20 w-[400px]">
-                    <CommandFeed
-                        messages={messages}
-                        onSend={handleCommand}
-                        isProcessing={aiState === "thinking" || aiState === "speaking"}
-                    />
+                {/* BOTTOM - Command Feed (Expanded) */}
+                <div className="fixed bottom-4 left-[480px] right-[480px] z-30 px-6 flex justify-center">
+                    <div className="w-full max-w-3xl">
+                        <CommandFeed
+                            messages={messages}
+                            onSend={handleCommand}
+                            isProcessing={aiState === "thinking" || aiState === "speaking"}
+                        />
+                    </div>
                 </div>
 
                 {/* RIGHT EDGE - Live Feed Panel (Medium Width) */}
@@ -969,33 +1244,38 @@ export default function NeuralInterface() {
                 </div>
 
                 {/* CENTER - Globe (Buttons and Globe together) */}
-                <div className="relative z-10 min-h-screen flex items-center justify-center pl-[480px] pr-[320px]">
+                <div className="relative z-10 min-h-screen flex items-center justify-center -translate-y-32">
                     <div className="relative w-[700px] h-[700px]">
                         {/* Globe Container - No Ring */}
                         <div className="absolute inset-0 rounded-full overflow-hidden">
                             <AIGlobe audioAnalyzer={audioAnalyzer} aiState={aiState} isMuted={isMuted} />
                         </div>
 
-                        {/* Orbiting Buttons - Closer to globe */}
-                        <OrbitButton icon={Code} angle={-90} radius={300} onClick={() => setShowCodeEditor(true)} />
-                        <OrbitButton icon={Settings} angle={-150} radius={300} />
+                        {/* Orbiting Buttons - Side Flanks */}
+                        {/* LEFT CLUSTER */}
+                        <OrbitButton icon={Code} angle={-135} radius={330} onClick={() => setShowCodeEditor(true)} />
+                        {/* Settings at 180 degrees (far left) */}
+                        <OrbitButton icon={Settings} angle={180} radius={330} />
+                        {/* Mic at 135 degrees (bottom left) */}
                         <OrbitButton
                             icon={isMuted ? MicOff : Mic}
-                            angle={-210}
-                            radius={300}
+                            angle={135}
+                            radius={330}
                             active={!isMuted && aiState === "listening"}
                             onClick={toggleMute}
                             style={{
                                 opacity: isMuted ? 0.5 : 1
                             }}
                         />
-                        <OrbitButton icon={Search} angle={-30} radius={300} onClick={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')} />
-                        <OrbitButton icon={FolderOpen} angle={30} radius={300} />
-                        <OrbitButton icon={Eye} angle={90} radius={300} onClick={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')} />
+
+                        {/* RIGHT CLUSTER */}
+                        <OrbitButton icon={Camera} angle={-45} radius={330} onClick={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')} />
+                        <OrbitButton icon={FolderOpen} angle={0} radius={330} />
+                        <OrbitButton icon={Eye} angle={45} radius={330} onClick={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')} />
                     </div>
                 </div>
 
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 text-xs tracking-[0.4em] text-cyan-500/50 font-mono">
+                <div className="fixed bottom-3 left-1/2 -translate-x-1/2 text-xs tracking-[0.4em] text-cyan-500/50 font-mono">
                     NEURAL INTERFACE V2.0
                 </div>
             </div>
