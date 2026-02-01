@@ -32,7 +32,7 @@ timeout /t 5 /nobreak > nul
 
 :: Start React frontend in new window
 echo [3/3] Starting React frontend on port 5173...
-start "React Frontend" cmd /k "cd /d %~dp0web\client && npm run dev"
+start "React Frontend" cmd /k "cd /d %~dp0desktop && npm run dev"
 
 echo.
 echo ============================================
