@@ -66,7 +66,7 @@ export default function AIGlobe({ audioAnalyzer, aiState = "idle", isMuted = fal
     /* =======================
        PARTICLE GLOBE
     ======================= */
-    const RADIUS = 1.2;
+    const RADIUS = 1.5;
     const COUNT = 12000;
 
     const positions = new Float32Array(COUNT * 3);
