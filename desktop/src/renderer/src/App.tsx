@@ -532,29 +532,32 @@ function CommandFeed({
                     setInput("");
                     setAttachedImage(null);
                     setImagePreview(null);
+                    if (fileInputRef.current) fileInputRef.current.value = ""; // Reset file input
                 }}
-                className="p-4 border-t border-cyan-500/10"
+                className="p-4 border-t border-cyan-500/10 flex flex-col gap-2"
             >
-                {/* Image Preview */}
+                {/* Image Preview - Inside the box now */}
                 {imagePreview && (
-                    <div className="mb-3 relative inline-block">
+                    <div className="relative inline-block self-start">
                         <img
                             src={imagePreview}
                             alt="Attached"
-                            className="h-20 rounded-lg border border-cyan-500/30"
+                            className="h-16 rounded border border-cyan-500/30 object-contain bg-black/50"
                         />
                         <button
                             type="button"
                             onClick={() => {
                                 setAttachedImage(null);
                                 setImagePreview(null);
+                                if (fileInputRef.current) fileInputRef.current.value = ""; // Reset file input
                             }}
-                            className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-400"
+                            className="absolute -top-2 -right-2 w-5 h-5 bg-red-500/80 hover:bg-red-500 rounded-full flex items-center justify-center transition-colors border border-white/10"
                         >
                             <X size={12} className="text-white" />
                         </button>
                     </div>
                 )}
+
                 <div className={`flex rounded-xl overflow-hidden border transition-colors ${isProcessing ? 'border-slate-700 opacity-50 cursor-not-allowed' : 'border-cyan-500/30 hover:border-cyan-500/50'
                     }`}>
                     {/* Hidden File Input */}
@@ -563,6 +566,7 @@ function CommandFeed({
                         ref={fileInputRef}
                         accept="image/*"
                         className="hidden"
+                        onClick={(e) => (e.currentTarget.value = "")} // Allow selecting same file again
                         onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (file) {
