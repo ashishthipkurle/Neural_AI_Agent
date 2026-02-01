@@ -390,7 +390,7 @@ async def health_check():
 @app.post("/api/code", response_model=ChatResponse)
 async def generate_code(request: ChatRequest):
     """
-    Generate code using the specialized coding model (deepseek-coder).
+    Generate code using the unified LLM model.
     This endpoint is optimized for code generation tasks.
     """
     if agent is None:
@@ -402,8 +402,8 @@ async def generate_code(request: ChatRequest):
     logger.info(f"💻 Code generation request: {request.message[:100]}...")
     
     try:
-        # Coding model for better code generation
-        coding_model = "deepseek-coder:6.7b"
+        # Use unified model from config for all tasks including coding
+        coding_model = agent.config.get('llm', {}).get('model_name', 'gpt-oss:120b-cloud')
         logger.info(f"🤖 Using model: {coding_model}")
         
         # Direct call to Ollama with coding model
@@ -452,7 +452,7 @@ async def generate_code(request: ChatRequest):
         logger.error(f"❌ Code generation error: {e}")
         logger.error(traceback.format_exc())
         return ChatResponse(
-            response=f"Code generation failed: {str(e) or 'Unknown error'}. Make sure Ollama is running and deepseek-coder:6.7b is installed.",
+            response=f"Code generation failed: {str(e) or 'Unknown error'}. Make sure Ollama is running and the model is installed (ollama pull gpt-oss:120b-cloud).",
             status="error",
             action_taken=None
         )

@@ -8,11 +8,10 @@ agent:
 
 llm:
   provider: "ollama"
-  # Default model for general tasks (text-only, fast)
-  model_name: "phi3:mini"
-  # Specialized models
-  vision_model: "llava"      # Used only when image is attached
-  coding_model: "deepseek-coder:6.7b"
+  # Unified model for text/code tasks (Cloud connection required)
+  model_name: "gpt-oss:120b-cloud"
+  # Vision model kept for image analysis (gpt-oss is text-only)
+  vision_model: "llava"
   api_key: "ollama"
 
 security:

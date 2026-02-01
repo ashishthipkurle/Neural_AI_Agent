@@ -416,12 +416,24 @@ interface CommandFeedProps {
     messages: Message[];
     onSend: (t: string, image?: string | null) => void;
     isProcessing?: boolean;
+    onToggleMute: () => void;
+    isMuted: boolean;
+    onToggleCode: () => void;
+    onToggleCamera: () => void;
+    onToggleCCTV: () => void;
+    liveFeedMode: "idle" | "camera" | "cctv";
 }
 
 function CommandFeed({
     messages,
     onSend,
-    isProcessing = false
+    isProcessing = false,
+    onToggleMute,
+    isMuted,
+    onToggleCode,
+    onToggleCamera,
+    onToggleCCTV,
+    liveFeedMode
 }: CommandFeedProps) {
     const [input, setInput] = useState("");
     const [attachedImage, setAttachedImage] = useState<string | null>(null);
@@ -443,15 +455,38 @@ function CommandFeed({
                 background: "rgba(5,20,30,0.85)",
                 border: "1px solid rgba(0,180,200,0.3)",
                 backdropFilter: "blur(20px)",
-                maxHeight: "500px" // prevent total component growth
+                maxHeight: "350px" // prevent covering the globe
             }}
         >
-            <div className="px-5 py-4 flex items-center gap-3 border-b border-cyan-500/10">
-                <div className={`w-3 h-3 rounded-full ${isProcessing ? 'animate-pulse bg-amber-400' : 'bg-cyan-400'}`} />
-                <span className="text-lg font-medium text-white tracking-wide">
-                    {isProcessing ? 'Processing...' : 'Command Feed'}
-                </span>
-                <Sparkles size={18} className="ml-auto text-cyan-500/40" />
+            <div className="px-5 py-4 flex items-center justify-between border-b border-cyan-500/10">
+                <div className="flex items-center gap-3">
+                    <div className={`w-3 h-3 rounded-full ${isProcessing ? 'animate-pulse bg-amber-400' : 'bg-cyan-400'}`} />
+                    <span className="text-lg font-medium text-white tracking-wide">
+                        {isProcessing ? 'Processing...' : 'Command Feed'}
+                    </span>
+                </div>
+
+                {/* Integrated Controls */}
+                <div className="flex items-center gap-2">
+                    <button onClick={onToggleCode} className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Code Editor">
+                        <Code size={18} />
+                    </button>
+                    <button onClick={onToggleCamera} className={`p-2 rounded-lg hover:bg-cyan-500/10 transition-colors ${liveFeedMode === 'camera' ? 'text-cyan-300 bg-cyan-500/20' : 'text-cyan-400'}`} title="Camera Mode">
+                        <Eye size={18} />
+                    </button>
+                    <button onClick={onToggleCCTV} className={`p-2 rounded-lg hover:bg-cyan-500/10 transition-colors ${liveFeedMode === 'cctv' ? 'text-red-400 bg-red-500/20' : 'text-cyan-400'}`} title="Surveillance">
+                        <Camera size={18} />
+                    </button>
+                    <button onClick={onToggleMute} className={`p-2 rounded-lg hover:bg-cyan-500/10 transition-colors ${isMuted ? 'text-red-400' : 'text-cyan-400'}`} title="Toggle Mic">
+                        {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
+                    </button>
+                    <button className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Files">
+                        <FolderOpen size={18} />
+                    </button>
+                    <button className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Settings">
+                        <Settings size={18} />
+                    </button>
+                </div>
             </div>
 
             <div
@@ -1232,6 +1267,12 @@ export default function NeuralInterface() {
                             messages={messages}
                             onSend={handleCommand}
                             isProcessing={aiState === "thinking" || aiState === "speaking"}
+                            onToggleMute={toggleMute}
+                            isMuted={isMuted}
+                            onToggleCode={() => setShowCodeEditor(true)}
+                            onToggleCamera={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')}
+                            onToggleCCTV={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')}
+                            liveFeedMode={liveFeedMode}
                         />
                     </div>
                 </div>
@@ -1252,26 +1293,7 @@ export default function NeuralInterface() {
                         </div>
 
                         {/* Orbiting Buttons - Side Flanks */}
-                        {/* LEFT CLUSTER */}
-                        <OrbitButton icon={Code} angle={-135} radius={330} onClick={() => setShowCodeEditor(true)} />
-                        {/* Settings at 180 degrees (far left) */}
-                        <OrbitButton icon={Settings} angle={180} radius={330} />
-                        {/* Mic at 135 degrees (bottom left) */}
-                        <OrbitButton
-                            icon={isMuted ? MicOff : Mic}
-                            angle={135}
-                            radius={330}
-                            active={!isMuted && aiState === "listening"}
-                            onClick={toggleMute}
-                            style={{
-                                opacity: isMuted ? 0.5 : 1
-                            }}
-                        />
-
-                        {/* RIGHT CLUSTER */}
-                        <OrbitButton icon={Camera} angle={-45} radius={330} onClick={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')} />
-                        <OrbitButton icon={FolderOpen} angle={0} radius={330} />
-                        <OrbitButton icon={Eye} angle={45} radius={330} onClick={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')} />
+                        {/* Buttons moved to Command Feed */}
                     </div>
                 </div>
 
