@@ -9,13 +9,12 @@
 The **Neural AI Agent** is a modular, extensible AI system that runs locally on your machine. It combines powerful LLMs (Linear Logic Models) with real-time voice synthesis, computer vision, and OS-level capability to act as a true digital assistant.
 
 ## ✨ Features
-- **🧠 Local LLM Brain**: Powered by Ollama (supports Llama 3, Phi-3, Mistral, etc.).
+- **🧠 LLM Brain**: Powered by **gpt-oss:120b-cloud** and **llava**.
 - **🗣️ Voice Interface**: Real-time speech-to-text (Whisper) and high-quality text-to-speech (Piper).
-- **👁️ Computer Vision**: Uses YOLOv8 and Vision LLMs to "see" and analyze the screen or camera feed.
+- **👁️ Computer Vision**: Uses **llava** and Vision LLMs to "see" and analyze the screen or camera feed.
 - **🌐 3D Interactive Globe**: A futuristic UI visualization of the agent's "thought network".
 - **💻 Desktop Control**: Can launch apps, search the web (Wikipedia/DuckDuckGo), and run terminal commands.
-- **🛡️ Privacy First**: Everything runs locally. No cloud dependencies.
-
+- **🛡️ Hybrid Architecture: Core logic runs locally, but high-intelligence tasks are processed via a secure cloud connection.
 ---
 
 ## 🛠️ Tech Stack
