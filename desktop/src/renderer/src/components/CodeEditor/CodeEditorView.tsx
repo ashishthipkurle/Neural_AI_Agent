@@ -1095,6 +1095,7 @@ INSTRUCTIONS:
                     <TerminalPanel
                         isOpen={terminalOpen}
                         onToggle={() => setTerminalOpen(!terminalOpen)}
+                        cwd={rootPath || undefined}
                     />
                 </div>
 

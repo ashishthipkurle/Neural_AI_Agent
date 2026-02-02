@@ -20,18 +20,22 @@ interface TerminalTab {
 interface TerminalPanelProps {
     isOpen: boolean;
     onToggle: () => void;
+    cwd?: string;
 }
 
 const DEFAULT_CWD = "D:\\All Projects\\My AI Agent\\generated";
 
-// Window declaration removed - using api adapter
-
-
-export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) {
+export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [tabs, setTabs] = useState<TerminalTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const termInstances = useRef<Map<string, { term: XTerm; fit: FitAddon; cleanup: () => void }>>(new Map());
+
+    useEffect(() => {
+        console.log("DEBUG: TerminalPanel mounted. API:", api);
+        if (!api?.terminal) console.error("CRITICAL: Electron API not available!");
+        else console.log("DEBUG: Terminal API found:", api.terminal);
+    }, []);
 
     /* ========================= SESSION RESTORE ========================= */
 
@@ -45,12 +49,10 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
                     setActiveTabId(parsed[0].id);
                     // Recreate PTY sessions for restored tabs
                     parsed.forEach((tab) => {
-                        parsed.forEach((tab) => {
-                            api.terminal.create({
-                                id: tab.id,
-                                cwd: tab.cwd,
-                                shell: tab.shell,
-                            });
+                        api.terminal.create({
+                            id: tab.id,
+                            cwd: tab.cwd,
+                            shell: tab.shell,
                         });
                     });
                 }
@@ -72,11 +74,14 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
 
     const createTab = useCallback((shell: ShellType = "powershell") => {
         const id = crypto.randomUUID();
+        // Use provided cwd or fallback to default
+        const effectiveCwd = cwd || DEFAULT_CWD;
+
         const newTab: TerminalTab = {
             id,
             name: shell === "powershell" ? "PowerShell" : "CMD",
             shell,
-            cwd: DEFAULT_CWD,
+            cwd: effectiveCwd,
             aiWritable: true,
         };
 
@@ -86,10 +91,10 @@ export default function TerminalPanel({ isOpen, onToggle }: TerminalPanelProps) 
         // Create PTY session
         api.terminal.create({
             id,
-            cwd: DEFAULT_CWD,
+            cwd: effectiveCwd,
             shell,
         });
-    }, []);
+    }, [cwd]);
 
     /* ============================ CLOSE TAB ============================ */
 

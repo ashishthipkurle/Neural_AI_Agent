@@ -13,8 +13,8 @@ export class PtyManager {
     private dataListeners: Map<string, (data: string) => void> = new Map()
     private exitListeners: Map<string, (code: number) => void> = new Map()
 
-    create(shell: 'powershell' | 'cmd', cwd?: string): string {
-        const id = randomUUID()
+    create(shell: 'powershell' | 'cmd', id?: string, cwd?: string): string {
+        const sessionId = id || randomUUID()
         const workingDir = cwd || os.homedir()
         const shellPath = shell === 'powershell' ? 'powershell.exe' : 'cmd.exe'
         // Use -NoExit to keep shell alive after commands complete
@@ -43,20 +43,20 @@ export class PtyManager {
             useConpty: false
         })
 
-        this.sessions.set(id, { id, pty: ptyProcess, shell })
+        this.sessions.set(sessionId, { id: sessionId, pty: ptyProcess, shell })
 
         ptyProcess.onData((data) => {
-            const listener = this.dataListeners.get(id)
+            const listener = this.dataListeners.get(sessionId)
             if (listener) listener(data)
         })
 
         ptyProcess.onExit(({ exitCode }) => {
-            const listener = this.exitListeners.get(id)
+            const listener = this.exitListeners.get(sessionId)
             if (listener) listener(exitCode)
-            this.sessions.delete(id)
+            this.sessions.delete(sessionId)
         })
 
-        return id
+        return sessionId
     }
 
     write(id: string, data: string): void {

@@ -4,26 +4,31 @@ import { contextBridge, ipcRenderer } from 'electron'
 const terminalAPI = {
     create: (data: { id: string; cwd: string; shell: 'powershell' | 'cmd' }) =>
         ipcRenderer.invoke('terminal:create', data),
-    input: (data: { id: string; data: string }) =>
-        ipcRenderer.invoke('terminal:input', data),
-    resize: (data: { id: string; cols: number; rows: number }) =>
-        ipcRenderer.invoke('terminal:resize', data),
+    input: (data: { id: string; data: string }) => {
+        ipcRenderer.send('terminal:input', data)
+        return Promise.resolve()
+    },
+    resize: (data: { id: string; cols: number; rows: number }) => {
+        ipcRenderer.send('terminal:resize', data.id, data.cols, data.rows)
+        return Promise.resolve()
+    },
     kill: (id: string) =>
         ipcRenderer.invoke('terminal:kill', id),
     list: () =>
         ipcRenderer.invoke('terminal:list'),
     onData: (id: string, callback: (data: string) => void) => {
-        const channel = `terminal:data:${id}`
-        const handler = (_: any, data: string) => callback(data)
-        ipcRenderer.on(channel, handler)
-        // Return cleanup function
-        return () => ipcRenderer.removeListener(channel, handler)
+        const handler = (_: any, incomingId: string, data: string) => {
+            if (incomingId === id) callback(data)
+        }
+        ipcRenderer.on('terminal:data', handler)
+        return () => ipcRenderer.removeListener('terminal:data', handler)
     },
     onExit: (id: string, callback: (code: number) => void) => {
-        const channel = `terminal:exit:${id}`
-        const handler = (_: any, code: number) => callback(code)
-        ipcRenderer.on(channel, handler)
-        return () => ipcRenderer.removeListener(channel, handler)
+        const handler = (_: any, incomingId: string, code: number) => {
+            if (incomingId === id) callback(code)
+        }
+        ipcRenderer.on('terminal:exit', handler)
+        return () => ipcRenderer.removeListener('terminal:exit', handler)
     }
 }
 
