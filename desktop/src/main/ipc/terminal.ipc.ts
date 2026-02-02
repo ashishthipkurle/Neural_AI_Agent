@@ -14,6 +14,7 @@ export function registerTerminalHandlers(
     ptyManager: PtyManager,
     mainWindow: BrowserWindow | null
 ): void {
+    ipcMain.removeHandler('terminal:create')
     ipcMain.handle('terminal:create', async (_, shell: 'powershell' | 'cmd') => {
         if (shell !== 'powershell' && shell !== 'cmd') {
             throw new Error('Invalid shell type')
@@ -35,18 +36,21 @@ export function registerTerminalHandlers(
         return id
     })
 
+    ipcMain.removeAllListeners('terminal:write')
     ipcMain.on('terminal:write', (_, id: string, data: string) => {
         if (typeof id === 'string' && typeof data === 'string') {
             ptyManager.write(id, data)
         }
     })
 
+    ipcMain.removeAllListeners('terminal:resize')
     ipcMain.on('terminal:resize', (_, id: string, cols: number, rows: number) => {
         if (typeof id === 'string' && cols > 0 && rows > 0) {
             ptyManager.resize(id, cols, rows)
         }
     })
 
+    ipcMain.removeAllListeners('terminal:dispose')
     ipcMain.on('terminal:dispose', (_, id: string) => {
         if (typeof id === 'string') {
             ptyManager.dispose(id)

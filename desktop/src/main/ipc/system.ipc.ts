@@ -15,6 +15,7 @@ function isBlocked(command: string): boolean {
 }
 
 export function registerSystemHandlers(ipcMain: IpcMain, mainWindow: BrowserWindow | null): void {
+    ipcMain.removeHandler('system:runCommand')
     ipcMain.handle('system:runCommand', async (_, command: string) => {
         if (!command || typeof command !== 'string') {
             return { approved: false, error: 'Invalid command' }
@@ -47,6 +48,7 @@ export function registerSystemHandlers(ipcMain: IpcMain, mainWindow: BrowserWind
         }
     })
 
+    ipcMain.removeHandler('system:openApp')
     ipcMain.handle('system:openApp', async (_, appName: string) => {
         if (!appName || typeof appName !== 'string') return { approved: false }
         if (!mainWindow) return { approved: false }
@@ -70,6 +72,7 @@ export function registerSystemHandlers(ipcMain: IpcMain, mainWindow: BrowserWind
         }
     })
 
+    ipcMain.removeHandler('system:openUrl')
     ipcMain.handle('system:openUrl', async (_, url: string) => {
         if (url && typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))) {
             await shell.openExternal(url)

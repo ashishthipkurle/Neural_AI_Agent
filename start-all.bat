@@ -24,7 +24,7 @@ timeout /t 2 /nobreak > nul
 
 :: Start Python API server in new window
 echo [2/3] Starting Python API server on port 8000...
-start "Python API Server" cmd /k "cd /d %~dp0 && python agent/api_server.py"
+start "Python API Server" cmd /k "cd /d %~dp0 && python -m agent.api_server"
 
 :: Wait a moment for Python to start
 timeout /t 5 /nobreak > nul

@@ -1,0 +1,13 @@
+age‑calculator/
+│
+├─ public/
+│   └─ index.html
+│
+├─ src/
+│   ├─ App.js
+│   ├─ index.js
+│   └─ theme.js          # optional – custom MUI theme
+│
+├─ .gitignore
+├─ package.json
+└─ README.md

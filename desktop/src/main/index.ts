@@ -61,10 +61,21 @@ function createMenuTemplate(): Electron.MenuItemConstructorOptions[] {
                 { label: 'New File', accelerator: 'CmdOrCtrl+N', click: () => mainWindow?.webContents.send('menu:newFile') },
                 {
                     label: 'Open Folder...', accelerator: 'CmdOrCtrl+O', click: async () => {
-                        if (!mainWindow) return;
-                        const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-                        if (!result.canceled && result.filePaths.length > 0) {
-                            mainWindow.webContents.send('menu:openFolder', result.filePaths[0]);
+                        console.log('DEBUG: Menu > Open Folder clicked');
+                        const win = BrowserWindow.getFocusedWindow() || mainWindow;
+                        if (!win) {
+                            console.error('ERROR: No window found for Open Folder dialog');
+                            return;
+                        }
+
+                        try {
+                            const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+                            if (!result.canceled && result.filePaths.length > 0) {
+                                console.log('DEBUG: Sending menu:openFolder', result.filePaths[0]);
+                                win.webContents.send('menu:openFolder', result.filePaths[0]);
+                            }
+                        } catch (err) {
+                            console.error('ERROR in Open Folder:', err);
                         }
                     }
                 },

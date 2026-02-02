@@ -4,6 +4,7 @@ import { request } from 'http'
 let isGenerating = false
 
 export function registerAgentHandlers(ipcMain: IpcMain, mainWindow: BrowserWindow | null): void {
+    ipcMain.removeHandler('agent:command')
     ipcMain.handle('agent:command', async (_, text: string) => {
         if (!text || typeof text !== 'string') throw new Error('Invalid command')
 
@@ -51,5 +52,6 @@ export function registerAgentHandlers(ipcMain: IpcMain, mainWindow: BrowserWindo
         req.end()
     })
 
+    ipcMain.removeAllListeners('agent:cancel')
     ipcMain.on('agent:cancel', () => { /* Handled on backend if needed */ })
 }
