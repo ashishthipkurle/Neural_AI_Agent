@@ -71,6 +71,10 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
     const [proposalId, setProposalId] = useState('');
     const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
+    // Derived state
+    const currentFile = openFiles.find(f => f.path === activeFile);
+    const saveFunctionRef = useRef<() => void>(() => { });
+
     // Effect to register inline provider
     useEffect(() => {
         if (editorRef.current) {
@@ -79,9 +83,26 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
         }
     }, [editorRef.current]);
 
+    // Auto-Save Effect (Debounced)
+    useEffect(() => {
+        if (currentFile?.modified) {
+            const timer = setTimeout(() => {
+                console.log('🔄 Auto-saving:', currentFile.name);
+                saveFunctionRef.current();
+            }, 2000); // 2 seconds debounce
+            return () => clearTimeout(timer);
+        }
+    }, [currentFile, openFiles]);
+
     const handleEditorDidMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
         editorRef.current = editor;
         registerInlineCompletionProvider(editor);
+
+        // Register Ctrl+S / Cmd+S
+        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+            console.log('💾 Ctrl+S triggered');
+            saveFunctionRef.current();
+        });
     };
 
 
@@ -541,8 +562,22 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
 
     const saveFileToBackend = async (path: string, content: string, filename?: string) => {
         try {
-            // Determine save location - use rootPath if selected, else default
             const saveDir = rootPath || 'D:\\All Projects\\My AI Agent\\generated';
+
+            // Use Electron API if available
+            if (window.electronAPI?.fs) {
+                const targetPath = filename ? `${saveDir}\\${filename}` : path;
+                await window.electronAPI.fs.writeFile(targetPath, content);
+
+                setOpenFiles(prev => prev.map(f => f.path === path ? { ...f, modified: false } : f));
+                console.log('✅ File saved via Electron:', targetPath);
+
+                // Refresh file tree if needed
+                if (rootPath) refreshFileTree();
+                return;
+            }
+
+            // Fallback to backend API
             const response = await fetch('http://localhost:8000/api/save-file', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -614,9 +649,17 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
 
     const saveCurrentFile = () => {
         if (currentFile) {
+            console.log('💾 Manual Save Triggered via Ctrl+S');
             saveFileToBackend(currentFile.path, currentFile.content);
+        } else {
+            console.log('⚠️ No active file to save');
         }
     };
+
+    // Update ref for keyboard shortcuts
+    useEffect(() => {
+        saveFunctionRef.current = saveCurrentFile;
+    }, [saveCurrentFile]);
 
     const sendToAgent = async () => {
         if (!agentInput.trim()) return;
@@ -838,7 +881,7 @@ INSTRUCTIONS:
         }
     };
 
-    const currentFile = openFiles.find(f => f.path === activeFile);
+
 
     const renderNode = (node: FileNode, depth = 0): React.ReactNode => (
         <div key={node.path}>
