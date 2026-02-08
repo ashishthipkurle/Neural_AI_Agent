@@ -1,4 +1,4 @@
-
+import sys
 import logging
 import json
 import queue
@@ -97,3 +97,6 @@ class SpeechToText:
         except Exception as e:
             self.logger.error(f"STT Error: {e}")
             return ""
+
+# Alias for compatibility
+SpeechRecognizer = SpeechToText

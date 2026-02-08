@@ -81,6 +81,28 @@ class ToolRouter:
         # Automation
         self.register_tool("schedule_task", self._schedule_wrapper)
 
+        # Telegram Tools (Dynamic)
+        try:
+            from agent.skills.telegram.skill import TelegramSkill
+            self._telegram_skill = TelegramSkill()
+            self._telegram_skill.on_load()
+            self.register_tool("telegram_check_messages", self._telegram_check_messages)
+            self.register_tool("telegram_send_message", self._telegram_send_message)
+        except Exception as e:
+            self.logger.warning(f"Telegram skill not available: {e}")
+            self._telegram_skill = None
+
+        # Mission Control (Dynamic)
+        try:
+            from agent.skills.mission.skill import MissionControlSkill
+            self._mission_skill = MissionControlSkill()
+            self._mission_skill.on_load()
+            self._mission_skill.set_skill_router(self)  # Inject router
+            self.register_tool("start_mission", self._start_mission)
+        except Exception as e:
+            self.logger.warning(f"Mission skill not available: {e}")
+            self._mission_skill = None
+
     def _chat_tool(self, message: str = "Request processed.") -> str:
         return f"Agent: {message}"
 
@@ -98,6 +120,77 @@ class ToolRouter:
                  print(f"[Scheduled Alert]: {action_params.get('message')}")
 
         return self.scheduler.add_job(interval, unit, job)
+
+    async def _telegram_check_messages(self) -> str:
+        """Wrapper for telegram check_messages."""
+        if not self._telegram_skill:
+            return "Telegram skill not loaded."
+        result = await self._telegram_skill.execute("check_messages", {})
+        return result.message if result.success else f"Error: {result.error}"
+
+    async def _telegram_send_message(self, message: str = "Hello from Agent") -> str:
+        """Wrapper for telegram send_message."""
+        if not self._telegram_skill:
+            return "Telegram skill not loaded."
+        result = self._telegram_skill.execute("send_message", {"message": message})
+        return result.message if result.success else f"Error: {result.error}"
+
+    async def _start_mission(self, goal: str) -> str:
+        """Wrapper for mission start_mission."""
+        if not self._mission_skill:
+            return "Mission skill not loaded."
+        result = await self._mission_skill.execute("start_mission", {"goal": goal})
+        return result.message if result.success else f"Error: {result.error}"
+
+    def set_skill_router(self, router):
+        """Link to Clowbot-class SkillRouter."""
+        self._clowbot_skill_router = router
+        # Also update Mission Skill's router link
+        if self._mission_skill:
+             self._mission_skill.set_skill_router(self)
+
+    # Method for MissionControlSkill to call other skills
+    async def execute_skill_action(self, skill_name: str, action: str, params: dict, context: dict = None):
+        """Execute a skill action by name (for MissionControlSkill)."""
+        from agent.skills.base_skill import SkillResult
+        
+        # 1. Handle Clowbot-class Skills (like Planning, Browser, Desktop)
+        if hasattr(self, '_clowbot_skill_router') and self._clowbot_skill_router:
+            return await self._clowbot_skill_router.execute_skill_action(skill_name, action, params, context)
+        
+        # 2. Map skill names to tool names for internal tools
+        tool_mapping = {
+            ("telegram", "send_message"): "telegram_send_message",
+            ("telegram", "check_messages"): "telegram_check_messages",
+        }
+        
+        tool_key = (skill_name, action)
+        tool_name = tool_mapping.get(tool_key)
+        
+        if tool_name and tool_name in self.tools:
+            try:
+                handler = self.tools[tool_name]
+                if asyncio.iscoroutinefunction(handler):
+                    result = await handler(**params)
+                else:
+                    result = handler(**params)
+                return SkillResult(success=True, message=str(result))
+            except Exception as e:
+                return SkillResult(success=False, error=str(e))
+        
+        # Fallback: try to find handler directly
+        handler = self.tools.get(action)
+        if handler:
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    result = await handler(**params)
+                else:
+                    result = handler(**params)
+                return SkillResult(success=True, message=str(result))
+            except Exception as e:
+                return SkillResult(success=False, error=str(e))
+        
+        return SkillResult(success=False, error=f"Skill action not found: {skill_name}.{action}")
 
     def register_tool(self, tool_name: str, handler: Callable):
         """

@@ -56,14 +56,23 @@ except ImportError:
     ProsodyProcessor = None
 
 
+try:
+    from chatterbox import ChatterboxTTS
+    CHATTERBOX_AVAILABLE = True
+except ImportError:
+    CHATTERBOX_AVAILABLE = False
+    ChatterboxTTS = None
+
+
 class TextToSpeech:
     """
     Production-Ready Neural TTS Engine.
     
     Priority:
     1. Edge Neural TTS (Online, Human-like)
-    2. Piper TTS (Offline, Good)
-    3. pyttsx3 (Offline, Robotic)
+    2. Chatterbox TTS (Local, High Quality)
+    3. Piper TTS (Local, Medium Quality)
+    4. pyttsx3 (Offline, Robotic)
     """
     
     # Edge TTS Configuration
@@ -83,8 +92,24 @@ class TextToSpeech:
         # Prosody
         self.prosody = ProsodyProcessor() if ProsodyProcessor else None
         
+
         # Init emergency fallback
         self._init_fallback()
+        
+        # Chatterbox (Local Neurual)
+        self.chatterbox = None
+        if CHATTERBOX_AVAILABLE:
+            try:
+                # Initialize with default settings (CPU/CUDA auto-detect)
+                # Note: First run will download models (~1GB)
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.logger.info(f"Loading Chatterbox TTS on {device}...")
+                # self.chatterbox = ChatterboxTTS.from_pretrained(device)
+                # self.logger.info("Chatterbox TTS Loaded.")
+                self.logger.warning("Chatterbox TTS disabled (stability)")
+            except Exception as e:
+                self.logger.error(f"Failed to load Chatterbox: {e}")
         
         if not EDGE_TTS_AVAILABLE:
             self.logger.warning("Edge TTS library not installed (pip install edge-tts).")
@@ -166,6 +191,14 @@ class TextToSpeech:
                 # Don't disable permanently on one error (might be transient net issue)
                 # But could decrement a health counter.
         
+        # Priority 1.5: Chatterbox (Local Neural)
+        if self.chatterbox and not self.use_fallback_only:
+             try:
+                self._speak_chatterbox(processed_text, settings)
+                return
+             except Exception as e:
+                self.logger.error(f"Chatterbox attempt failed: {e}")
+
         # Priority 2: Piper (Local Neural)
         if self.has_piper:
             try:
@@ -304,6 +337,39 @@ class TextToSpeech:
             except: pass
         else:
              raise Exception("Piper execution failed")
+
+    def _speak_chatterbox(self, text: str, settings):
+        """Execute Chatterbox TTS (High Quality Local)."""
+        if not self.chatterbox:
+            raise Exception("Chatterbox not loaded")
+        
+        try:
+            self.logger.info("Generating with Chatterbox...")
+            # Determine device (simple check)
+            # Default generation
+            wav_tensor = self.chatterbox.generate(text)
+            
+            # Convert to numpy
+            wav_numpy = wav_tensor.squeeze().cpu().numpy()
+            sr = self.chatterbox.sr
+            
+            # Playback
+            if sd:
+                sd.play(wav_numpy, sr)
+                sd.wait()
+            else:
+                # Fallback to file playback if sounddevice not avail
+                fp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                fp.close()
+                import soundfile as sf
+                sf.write(fp.name, wav_numpy, sr)
+                self._play_mp3_windows(fp.name) # Renamed to _play_media_windows ideally, but works for wav
+                try: os.remove(fp.name)
+                except: pass
+                
+        except Exception as e:
+            self.logger.error(f"Chatterbox generation failed: {e}")
+            raise e
 
     def _speak_system(self, text: str, settings):
         """Fallback to robotic system voice."""

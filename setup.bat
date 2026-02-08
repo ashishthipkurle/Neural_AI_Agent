@@ -1,76 +1,169 @@
 @echo off
-setlocal
-title AI Agent Setup
+setlocal EnableDelayedExpansion
+title AI Agent One-Click Setup
 
-echo ===================================================
-echo      Initialize AI Agent Environment
-echo ===================================================
+echo ===============================================================================
+echo                        AI AGENT ONE-CLICK SETUP
+echo ===============================================================================
+echo This script will install ALL necessary components:
+echo 1. Python 3.11 (if missing)
+echo 2. Node.js (for Desktop App)
+echo 3. FFmpeg (for Audio Processing)
+echo 4. Ollama (for Local LLM)
+echo 5. Python Libraries (including Chatterbox & InsightFace)
+echo ===============================================================================
+echo.
 
-:: 1. Check Python
-python --version >nul 2>&1
+:: Check for Winget
+winget --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Python is not installed or not in PATH.
-    echo Please install Python 3.10+ and try again.
+    echo [ERROR] Winget is not installed. Please update Windows or install App Installer from Store.
     pause
     exit /b 1
 )
-echo [OK] Python found.
 
-:: 2. Install Python Dependencies
+:: -----------------------------------------------------------------------------
+:: 1. SYSTEM DEPENDENCIES (using Winget)
+:: ----------------------------------------------------------------------------- 
+echo [Step 1/7] Checking System Dependencies...
+
+:: Python 3.11 Check
+python --version 2>nul | findstr /C:"3.11" >nul
+if %errorlevel% neq 0 (
+    echo [INSTALL] Python 3.11 not found or not default. Installing...
+    winget install Python.Python.3.11 -e --silent
+    echo [INFO] Please restart the script after Python installation so PATH updates!
+) else (
+    echo [OK] Python 3.11 detected.
+)
+
+:: Node.js Check
+node -v >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [INSTALL] Node.js not found. Installing...
+    winget install OpenJS.NodeJS -e --silent
+) else (
+    echo [OK] Node.js detected.
+)
+
+:: FFmpeg Check
+ffmpeg -version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [INSTALL] FFmpeg not found. Installing...
+    winget install Gyan.FFmpeg -e --silent
+) else (
+    echo [OK] FFmpeg detected.
+)
+
+:: Ollama Check
+tool -v >nul 2>&1
+:: 'ollama' command might block if server runs, checking binary existence or generic check
+where ollama >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [INSTALL] Ollama not found. Installing...
+    winget install Ollama.Ollama -e --silent
+) else (
+    echo [OK] Ollama detected.
+)
+
+:: -----------------------------------------------------------------------------
+:: 2. PYTHON VIRTUAL ENVIRONMENT
+:: -----------------------------------------------------------------------------
 echo.
-echo [1/4] Installing Python Dependencies...
+echo [Step 2/7] Setting up Python Environment...
+
+if not exist ".venv" (
+    echo [INFO] Creating .venv...
+    python -m venv .venv
+)
+
+call .venv\Scripts\activate.bat
+
+:: Upgrade pip
+python -m pip install --upgrade pip setuptools wheel
+
+:: -----------------------------------------------------------------------------
+:: 3. CORE PYTHON DEPENDENCIES
+:: -----------------------------------------------------------------------------
+echo.
+echo [Step 3/7] Installing Core Python Libraries...
+
+:: Install PyTorch (Universal - compatible with 3.11+)
+:: Using generic pip install, but forcing index-url if needed usually.
+:: For compatibility, we try standard install first.
 pip install -r requirements.txt
+
+:: -----------------------------------------------------------------------------
+:: 4. CHATTERBOX SPECIFIC SETUP
+:: -----------------------------------------------------------------------------
+echo.
+echo [Step 4/7] Installing Chatterbox (Voice Engine)...
+
+python -c "import chatterbox" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Failed to install python requirements.
-    pause
-    exit /b 1
+    echo [INFO] Chatterbox not detected. Performing specialized install...
+    
+    :: Chatterbox needs specific versions often conflicting with latest defaults
+    :: 1. Force compatible numpy
+    pip install "numpy<2.0.0"
+    
+    :: 2. Install dependencies manually
+    pip install "diffusers>=0.24.0" "transformers>=4.36.0" "scipy" "librosa" "pyloudnorm" "pykakasi" "s3tokenizer" "resemble-perth"
+    
+    :: 3. Install Chatterbox without deps to avoid downgrading torch if not needed
+    pip install --no-deps chatterbox-tts
+    
+    :: 4. Install Conformers/Sentencepiece
+    pip install conformer sentencepiece
+    
+    echo [OK] Chatterbox installed.
+) else (
+    echo [OK] Chatterbox already installed.
 )
 
-:: 3. Install Playwright Browsers
+:: -----------------------------------------------------------------------------
+:: 5. MODEL ASSETS SETUP
+:: -----------------------------------------------------------------------------
 echo.
-echo [2/4] Installing Playwright Browsers...
-playwright install
-if %errorlevel% neq 0 (
-    echo [WARNING] Playwright install had issues. You may need to run 'playwright install' manually.
+echo [Step 5/6] Downloading AI Models (Vosk, YOLO, Embeddings)...
+python setup_models.py
+
+:: -----------------------------------------------------------------------------
+:: 6. OLLAMA SETUP
+:: -----------------------------------------------------------------------------
+echo.
+echo [Step 6/6] Setting up Ollama Model...
+where ollama >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [INFO] Pulling phi3:mini model (approx 2.3GB)...
+    ollama pull phi3:mini
+) else (
+    echo [WARNING] Ollama binary not found in PATH, skipping model pull.
 )
 
-:: 4. Setup Desktop App (Node.js)
+:: -----------------------------------------------------------------------------
+:: 7. DESKTOP APP SETUP
+:: -----------------------------------------------------------------------------
 echo.
-echo [3/4] Setting up Desktop App...
+echo [Step 7/7] Building Desktop Application...
+
 if exist "desktop\package.json" (
     cd desktop
-    call npm install
-    if %errorlevel% neq 0 (
-        echo [WARNING] 'npm install' failed. Do you have Node.js installed?
-        echo Skipping desktop setup...
-    ) else (
-        echo [OK] Desktop dependencies installed.
-    )
+    echo [INFO] Installing NPM packages...
+    call npm install --silent
     cd ..
-) else (
-    echo [INFO] No desktop app found, skipping.
+    echo [OK] Desktop App ready.
 )
 
-:: 5. Check for Large Models (Piper)
+:: -----------------------------------------------------------------------------
+:: FINAL CHECK
+:: -----------------------------------------------------------------------------
 echo.
-echo [4/4] Checking Media Assets...
-if not exist "piper\piper.exe" (
-    echo.
-    echo [ATTENTION] Piper TTS is missing!
-    echo To enable high-quality local voice, download the windows-release of Piper.
-    echo extract it to proper directory so that 'piper\piper.exe' exists.
-    echo.
-) else (
-    echo [OK] Piper TTS found.
-)
-
-if not exist "yolov8n.pt" (
-    echo [INFO] YOLO model missing. It will be downloaded automatically on first run.
-)
-
-echo.
-echo ===================================================
-echo        Setup Complete! Ready to Run.
-echo ===================================================
+echo ===============================================================================
+echo                        SETUP COMPLETE
+echo ===============================================================================
+echo 1. To start the agent:  run 'start-all.bat'
+echo 2. To use Voice:        Ensure microphone is connected.
+echo 3. To use Vision:       Ensure webcam is connected.
 echo.
 pause

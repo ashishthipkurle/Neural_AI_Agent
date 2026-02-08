@@ -49,6 +49,14 @@ class CommandRouter:
         if "search" in u and (" on " in u or " using " in u):
             return False
         
+        # EXCEPTION: Mission mode commands go to SkillRouter
+        if "start mission" in u or "mission mode" in u:
+            return False
+        
+        # EXCEPTION: Telegram commands go to ToolRouter/SkillRouter
+        if "telegram" in u or "check telegram" in u:
+            return False
+        
         # Check for simple patterns we can handle fast
         if re.search(r"^(open|launch|start)\s+", u):
             return True

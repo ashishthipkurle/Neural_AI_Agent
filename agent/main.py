@@ -23,10 +23,20 @@ from pathlib import Path
 from typing import Optional
 from agent.core.command_router import CommandRouter # Fast Router
 from agent.core.router import ToolRouter # Tool Registry
+from agent.skills import SkillRouter # Clowbot-class Skill Router
 
 # Add project root to path (parent of agent/) for 'agent.' imports to work
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv(PROJECT_ROOT / ".env")
+    logger_temp = logging.getLogger("NeuralAgent")
+    logger_temp.info("Loaded .env file")
+except ImportError:
+    pass  # dotenv not installed, skip
 
 # Configure logging
 logging.basicConfig(
@@ -76,6 +86,7 @@ class NeuralAgent:
         self._consent_gate = None
         self._command_router = None # Core orchestrator router
         self.fast_command_router = CommandRouter() # Fast regex router
+        self._skill_router = None # Clowbot-class skill router
         self._rollback_manager = None
         self._llm_runtime = None
         self._audit_logger = None
@@ -97,7 +108,12 @@ class NeuralAgent:
             
             self._state_machine = StateMachine()
             self._audit_logger = AuditLogger()
-            self._consent_gate = ConsentGate()
+            
+            # Extract auto-approval setting
+            security_config = self.config.get('security', {})
+            auto_approval = security_config.get('auto_approval', False)
+            
+            self._consent_gate = ConsentGate(auto_approval=auto_approval)
             self._rollback_manager = RollbackManager()
             self._command_router = CommandRouter(
                 state_machine=self._state_machine,
@@ -111,6 +127,20 @@ class NeuralAgent:
                 self._command_router.register_handler(tool_name, handler)
             
             logger.info(f"✓ Core systems initialized (Registered {len(self._tool_router.tools)} tools)")
+            
+            # Initialize Skill Router (Clowbot-class)
+            try:
+                self._skill_router = SkillRouter()
+                self._skill_router.initialize()
+                skills = self._skill_router.list_skills()
+                logger.info(f"✓ Skill Router initialized ({len(skills)} skills loaded)")
+                
+                # Link to ToolRouter for cross-skill execution
+                if hasattr(self._tool_router, 'set_skill_router'):
+                    self._tool_router.set_skill_router(self._skill_router)
+                    
+            except Exception as skill_err:
+                logger.warning(f"⚠ Skill Router partial: {skill_err}")
             
             logger.info("✓ Core systems initialized")
         except Exception as e:
@@ -312,7 +342,7 @@ class NeuralAgent:
         
         # Broadcast Processing State IMMEDIATELY
         task_id = str(uuid.uuid4()) if 'uuid' in sys.modules or 'uuid' in globals() else str(int(asyncio.get_event_loop().time()))
-        if hasattr(self, 'sync_broadcast'):
+        if self.sync_broadcast:
             self.sync_broadcast("status", "system", "Processing...", task_id)
         
         try:
@@ -323,7 +353,7 @@ class NeuralAgent:
                 logger.info(f"Fast routing command: {user_input}")
                 
                 # Notify UI processing
-                if hasattr(self, 'sync_broadcast'):
+                if self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Executing fast command...", task_id)
                 
                 # Execute
@@ -331,7 +361,7 @@ class NeuralAgent:
                 response_text = result.get("response", "Done.")
                 
                 # Broadcast Assistant Response
-                if hasattr(self, 'sync_broadcast'):
+                if self.sync_broadcast:
                     self.sync_broadcast("assistant", "assistant", response_text, task_id)
                 
                 # Speak (with suppression to avoid double speech)
@@ -339,7 +369,7 @@ class NeuralAgent:
                      await self._voice_manager.speak(response_text, suppress_sync=True)
                 
                 # Broadcast Task Completion
-                if hasattr(self, 'sync_broadcast'):
+                if self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Done", task_id)
                     
                 # Add to memory
@@ -348,6 +378,43 @@ class NeuralAgent:
                     
                 self._state_machine.to_idle("Fast command complete")
                 return response_text
+            # ---------------------------------------------------------
+
+            # ---------------------------------------------------------
+            # SKILL ROUTER PATH: Clowbot-class skill execution
+            # ---------------------------------------------------------
+            if self._skill_router:
+                # Try to route through skill system first
+                skill = self._skill_router.skill_loader.get_skill_for_intent(user_input)
+                if skill:
+                    logger.info(f"Skill routing: {user_input} -> Skill '{skill.name}'")
+                    
+                    if self.sync_broadcast:
+                        self.sync_broadcast("status", "system", f"Executing via {skill.name} skill...", task_id)
+                    
+                    result = await self._skill_router.route_intent(user_input)
+                    
+                    if result.success:
+                        response_text = result.result.message or str(result.result.data)
+                        
+                        # Broadcast Assistant Response
+                        if self.sync_broadcast:
+                            self.sync_broadcast("assistant", "assistant", response_text, task_id)
+                        
+                        # Speak
+                        if self._voice_manager:
+                            await self._voice_manager.speak(response_text, suppress_sync=True)
+                        
+                        # Broadcast Task Completion
+                        if self.sync_broadcast:
+                            self.sync_broadcast("status", "system", "Done", task_id)
+                        
+                        # Add to memory
+                        if self._short_term_memory:
+                            self._short_term_memory.add_message("assistant", response_text)
+                        
+                        self._state_machine.to_idle("Skill execution complete")
+                        return response_text
             # ---------------------------------------------------------
 
             # Parse intent
@@ -370,13 +437,13 @@ class NeuralAgent:
                 if intent.action == "launch_app" and intent.parameters.get("app_name"):
                     app_name = intent.parameters["app_name"]
                     extra_args = intent.parameters.get("extra_args") # e.g. URL for browser
-                    if hasattr(self, 'sync_broadcast'):
+                    if self.sync_broadcast:
                         self.sync_broadcast("status", "system", f"Opening {app_name}", task_id)
                     response = await self._execute_launch_app(app_name, extra_args)
                     
                 elif intent.action == "browser_navigate" and intent.parameters.get("url"):
                     url = intent.parameters["url"]
-                    if hasattr(self, 'sync_broadcast'):
+                    if self.sync_broadcast:
                         self.sync_broadcast("status", "system", f"Navigating to {url}", task_id)
                     response = await self._execute_browser(url)
                     
@@ -388,6 +455,22 @@ class NeuralAgent:
                     
                 elif intent.action == "capture_screen":
                     response = await self._execute_screenshot()
+                
+                elif intent.action == "telegram_gui_send":
+                    # Route to DesktopSkill for GUI-based Telegram messaging
+                    contact = intent.parameters.get("contact", "")
+                    message = intent.parameters.get("message", "")
+                    if self.sync_broadcast:
+                        self.sync_broadcast("status", "system", f"Opening Telegram to message {contact}...", task_id)
+                    
+                    if self._skill_router:
+                        result = await self._skill_router.execute_skill_action(
+                            "desktop", "telegram_gui_send", 
+                            {"contact": contact, "message": message}
+                        )
+                        response = result.result.message if result.success else f"Failed: {result.error}"
+                    else:
+                        response = "Desktop skill not available"
                     
                 elif intent.action in ["chat", "chat_tool", "unknown"]:
                     # These will be handled by LLM response unification below
@@ -398,7 +481,7 @@ class NeuralAgent:
                     if self._command_router:
                         handler = self._command_router.get_handler(intent.action)
                         if handler:
-                            if hasattr(self, 'sync_broadcast'):
+                            if self.sync_broadcast:
                                 self.sync_broadcast("status", "system", f"Executing {intent.action}", task_id)
                             result = await self._command_router.route(intent.action, intent.parameters)
                             raw_response = str(result.result) if result.success else result.error
@@ -429,7 +512,7 @@ Do NOT say "according to the search results" - just answer directly."""
                     response = await self._chat_with_llm(user_input)
 
             # UNIFIED SYNC: Broadcast assistant event AND Speak
-            if hasattr(self, 'sync_broadcast'):
+            if self.sync_broadcast:
                 self.sync_broadcast("assistant", "assistant", response, task_id)
             
             if self._voice_manager:
@@ -438,7 +521,7 @@ Do NOT say "according to the search results" - just answer directly."""
             
             # CONFIRM COMPLETION (Sync)
             if any(intent.action != "chat" for intent in intents):
-                if hasattr(self, 'sync_broadcast'):
+                if self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Done", task_id)
 
             # Add response to memory
@@ -454,7 +537,7 @@ Do NOT say "according to the search results" - just answer directly."""
             
         except Exception as e:
             logger.error(f"Processing error: {e}")
-            if hasattr(self, 'sync_broadcast'):
+            if self.sync_broadcast:
                 self.sync_broadcast("error", "system", str(e))
             if self._voice_manager:
                 await self._voice_manager.speak(f"I encountered an error: {e}", suppress_sync=True)
@@ -611,6 +694,14 @@ Do NOT say "according to the search results" - just answer directly."""
         """Gracefully shutdown the agent."""
         logger.info("Shutting down agent...")
         
+        # Shutdown skill router (cleanup browser sessions, etc.)
+        if self._skill_router:
+            try:
+                self._skill_router.shutdown()
+                logger.info("✓ Skill router shutdown complete")
+            except Exception as e:
+                logger.warning(f"Skill router shutdown error: {e}")
+        
         if self._lock_controller:
             self._lock_controller.stop_presence_monitoring()
         
@@ -642,6 +733,12 @@ def main():
         agent.initialize()
         
         if args.mode == "cli":
+            # Use nest_asyncio to allow nested event loops (Playwright creates one during init)
+            try:
+                import nest_asyncio
+                nest_asyncio.apply()
+            except ImportError:
+                pass  # If not available, try anyway
             asyncio.run(agent.run_cli())
             
         elif args.mode == "api":

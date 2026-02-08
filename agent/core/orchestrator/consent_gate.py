@@ -80,7 +80,7 @@ class ConsentGate:
     # Actions requiring SINGLE confirmation
     SINGLE_CONFIRM_ACTIONS = frozenset({
         'write_file', 'install', 'download', 'send',
-        'browser_navigate', 'shell_command'
+        'shell_command'
     })
     
     # Actions requiring no confirmation
@@ -88,14 +88,18 @@ class ConsentGate:
         'read_file', 'list_files', 'search_memory',
         'capture_screen', 'get_time', 'chat_tool',
         'analyze_chart', 'analyze_screen_chart',       # Market analysis (read-only)
-        'describe_image', 'calculate', 'search_online' # Other non-destructive tools
+        'describe_image', 'calculate', 'search_online', # Other non-destructive tools
+        'store_memory', 'launch_app', 'browser_navigate', # Common safe actions
+        'move_mouse', 'click_mouse', 'type_text', 'press_key',  # UI automation
+        'telegram_check_messages', 'telegram_send_message', 'start_mission'  # Companion features
     })
     
     def __init__(
         self,
         voice_callback: Optional[Callable[[str], Awaitable[bool]]] = None,
         ui_callback: Optional[Callable[[str], Awaitable[bool]]] = None,
-        default_timeout: float = 30.0
+        default_timeout: float = 30.0,
+        auto_approval: bool = False
     ):
         """
         Initialize the consent gate.
@@ -104,18 +108,20 @@ class ConsentGate:
             voice_callback: Async function to get voice confirmation.
             ui_callback: Async function to get UI confirmation.
             default_timeout: Default timeout for consent requests.
+            auto_approval: If True, automatically approve SINGLE level requests.
         """
         self.logger = logging.getLogger("ConsentGate")
         self.voice_callback = voice_callback
         self.ui_callback = ui_callback
         self.default_timeout = default_timeout
+        self.auto_approval = auto_approval
         
         self._pending_requests: Dict[str, ConsentRequest] = {}
         self._history: list = []
         self._request_counter = 0
         self._lock = threading.RLock()
         
-        self.logger.info("ConsentGate initialized.")
+        self.logger.info(f"ConsentGate initialized (Auto-Approval: {self.auto_approval})")
     
     def _generate_request_id(self) -> str:
         """Generate unique request ID."""
@@ -133,6 +139,14 @@ class ConsentGate:
         Returns:
             Required ConsentLevel.
         """
+        # If auto-approval is enabled, bypass checks for most actions
+        if self.auto_approval:
+            # Still protect DUAL level actions? Clowbot mode implies FULL access.
+            # But let's keep DUAL for extreme safety (formatting disk) unless user explicitly said "FULL ACCESS"
+            # The user said "NO per-action confirmation is required".
+            # So we should bypass EVERYTHING.
+            return ConsentLevel.NONE
+
         action_lower = action.lower()
         
         # Check for dual confirmation keywords

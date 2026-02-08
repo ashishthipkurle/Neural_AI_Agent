@@ -48,8 +48,11 @@ class VectorStore:
             
             self._load_index()
             
-        except Exception as e:
-            self.logger.error(f"Failed to init VectorStore: {e}")
+        except (OSError, ImportError, MemoryError, Exception) as e:
+            self.logger.error(f"Failed to load VectorStore model (memory/dependency issue): {e}")
+            self.logger.warning("Semantic memory features disabled to prevent crash.")
+            self.model = None
+            self.index = None
 
     def _load_index(self):
         if os.path.exists(self.db_path) and os.path.exists(self.metadata_path):
@@ -292,6 +295,7 @@ class VectorStore:
                 )
                 count += 1
         
-        self.logger.info(f"Imported {count} memories")
-        return count
+
+# Alias for compatibility
+VectorMemoryStore = VectorStore
 

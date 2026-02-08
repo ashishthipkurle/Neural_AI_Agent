@@ -65,6 +65,29 @@ class IntentParser:
                     reasoning="User provided chart image for analysis"
                 )]
 
+        # NUCLEAR OPTION: Screen Analysis ("what's on my screen", "describe my screen")
+        screen_keywords = ["what's on my screen", "whats on my screen", "describe my screen", 
+                          "what do you see", "what is on screen", "read my screen", 
+                          "analyze my screen", "look at my screen", "what is on my screen"]
+        if any(k in u_lower for k in screen_keywords):
+            # This needs to capture screenshot then analyze with vision LLM
+            return [
+                Intent(
+                    action="capture_screen",
+                    tool_name="capture_screen", 
+                    parameters={},
+                    confidence=1.0,
+                    reasoning="User wants screen analysis - capturing first"
+                ),
+                Intent(
+                    action="describe_image",
+                    tool_name="describe_image",
+                    parameters={"use_last_capture": True},
+                    confidence=1.0,
+                    reasoning="Describe the captured screen"
+                )
+            ]
+
         # NUCLEAR OPTION: Force Search for Real-Time Info
         # This prevents the LLM from using stale 2023 knowledge for 2026 questions.
         search_triggers = ["current", "latest", "president", "prime minister", "ceo", "weather", "news", "price", "stock", "score", "who is the"]
@@ -76,6 +99,75 @@ class IntentParser:
                     parameters={"query": user_input},  # <-- CRITICAL: Pass the full question
                     confidence=1.0,
                     reasoning="Real-time information keyword detected."
+                )]
+
+        # NUCLEAR OPTION: Mission Mode
+        if "start mission" in u_lower or "mission mode" in u_lower:
+            # Extract goal from "start mission: <goal>" or "start mission <goal>"
+            goal = u_lower.replace("start mission:", "").replace("start mission", "").replace("mission mode:", "").replace("mission mode", "").strip()
+            if not goal:
+                goal = user_input  # Use full input if extraction failed
+            return [Intent(
+                action="start_mission",
+                tool_name="start_mission",
+                parameters={"goal": goal},
+                confidence=1.0,
+                reasoning="User wants to start an autonomous mission."
+            )]
+
+        # NUCLEAR OPTION: Telegram Commands
+        if "telegram" in u_lower:
+            # Skip if complex command (research/search) so LLM can handle the chain
+            # e.g. "Do deep research on cars and send to telegram" should NOT be trapped here
+            if any(k in u_lower for k in ["research", "analysis", "find", "deep", "scan", "monitor"]):
+                 pass # Fall through to LLM for complex handling
+            
+            # PRIORITY 1: Check for SEND first (user explicitly says "send X to Y")
+            elif "send" in u_lower:
+                # Smart Routing: Detect if user is messaging a CONTACT (GUI) or just sending (API)
+                # Pattern: "send [message] to [contact] on telegram" -> GUI
+                # Pattern: "send telegram message [text]" -> API (agent reporting)
+                
+                import re
+                # Try to extract contact name using " to " pattern
+                # e.g., "send hii to ashish on telegram" -> contact="ashish", message="hii"
+                contact_match = re.search(r"send\s+(.+?)\s+to\s+(\w+)\s+(?:on|via|using|in)?\s*telegram", u_lower)
+                
+                if contact_match:
+                    # User wants to message a specific person -> GUI Automation
+                    message = contact_match.group(1).strip()
+                    contact = contact_match.group(2).strip()
+                    
+                    return [Intent(
+                        action="telegram_gui_send",
+                        tool_name="desktop.telegram_gui_send",  # Route to DesktopSkill
+                        parameters={"contact": contact, "message": message},
+                        confidence=1.0,
+                        reasoning=f"User wants to send '{message}' to contact '{contact}' via Telegram GUI."
+                    )]
+                
+                # Fallback: No contact detected -> Use API (agent reporting mode)
+                msg = u_lower.replace("telegram", "").replace("send", "").replace("message", "").replace("saying", "")
+                for prep in [" on ", " to ", " via ", " using "]:
+                    msg = msg.replace(prep, " ")
+                msg = msg.strip()
+                
+                return [Intent(
+                    action="telegram_send_message",
+                    tool_name="telegram_send_message",
+                    parameters={"message": msg or "Test message"},
+                    confidence=1.0,
+                    reasoning="User wants to send a telegram message (API mode)."
+                )]
+            
+            # PRIORITY 2: Check messages (only if not sending)
+            elif "check" in u_lower or "read" in u_lower or "messages" in u_lower:
+                return [Intent(
+                    action="telegram_check_messages",
+                    tool_name="telegram_check_messages",
+                    parameters={},
+                    confidence=1.0,
+                    reasoning="User wants to check telegram messages."
                 )]
 
 
@@ -141,6 +233,10 @@ class IntentParser:
         - capture_screen(): Take a screenshot.
         - lock_agent(): Lock the device/agent securely.
         
+        - start_mission(goal): Start an autonomous complex task (e.g. "Research cars", "Build a website").
+        - telegram_send_message(message): Send a text message via Telegram API (for reporting results).
+        - telegram_check_messages(): Check for new messages.
+        
         RESPONSE FORMAT:
         Always output valid JSON.
         If multiple actions are needed, return a JSON array of actions.
@@ -185,7 +281,10 @@ class IntentParser:
              
         5. IF USER WANTS MARKET/CHART ANALYSIS:
            - "Analyze this chart" (with image) -> { "action": "analyze_chart", "parameters": { "image_path": "..." } }
-           - "Analyze my screen", "Check this stock" (no image) -> { "action": "analyze_screen_chart", "parameters": {} }
+        6. IF USER WANTS COMPLEX RESEARCH/MISSION:
+           - "Research cars and send report to Telegram" ->
+             { "action": "start_mission", "parameters": { "goal": "Research cars" }, "confidence": 1.0, "reasoning": "Mission will handle research and Telegram reporting." }
+           - IMPORTANT: Do NOT add a separate telegram_send_message when using start_mission - Mission handles its own Telegram updates automatically.
         """
         
         try:
@@ -290,6 +389,14 @@ class IntentParser:
                             reasoning=item.get("reasoning", "")
                         ))
                 if intents:
+                    # Filter: Remove redundant telegram_send_message if start_mission is present
+                    has_mission = any(i.action == "start_mission" for i in intents)
+                    if has_mission:
+                        # Remove telegram 'started/will send' messages - mission handles its own reporting
+                        intents = [i for i in intents if not (
+                            i.action == "telegram_send_message" and 
+                            any(kw in (i.parameters.get("message", "") or "").lower() for kw in ["started", "will send", "research", "report"])
+                        )]
                     return intents
                 else:
                     return [Intent(action="unknown", reasoning="LLM returned an empty or invalid list of actions.")]
@@ -333,7 +440,7 @@ class IntentParser:
 
     def _parse_fallback(self, user_input: str) -> List[Intent]:
         """
-         Mock parser fallback (Regex/Keyword based). Returns list.
+        Mock parser fallback (Regex/Keyword based). Returns list.
         """
         u = user_input.lower()
         intents = []
@@ -387,7 +494,8 @@ class IntentParser:
 
 
         # Simple app launch
-        if "launch" in u or "open" in u:
+        # Fix: Prevent "check telegram" from being parsed as "open telegram"
+        if ("launch" in u or "open" in u) and "telegram" not in u:
              clean_u = u.replace("launch", "").replace("open", "").strip()
              # Remove common filler words
              for word in ["the", "my", "a", "an"]:
@@ -395,6 +503,20 @@ class IntentParser:
              clean_u = clean_u.strip()
              if clean_u:
                  intents.append(Intent(action="launch_app", tool_name="launch_app", parameters={"app_name": clean_u}))
+
+        # Memory storage fallback
+        if any(k in u for k in ["remember", "save", "note that", "memorize"]):
+            # Extract what to remember (everything after the keyword)
+            for keyword in ["remember", "save", "note that", "memorize"]:
+                if keyword in u:
+                    text = u.split(keyword, 1)[1].strip()
+                    if text:
+                        intents.append(Intent(
+                            action="store_memory", 
+                            tool_name="store_memory", 
+                            parameters={"text": text}
+                        ))
+                    break
 
         # Vision / Surveillance Fallback
         if any(x in u for x in ["cctv", "surveillance", "scan", "camera"]):

@@ -89,11 +89,73 @@ class VisionTools:
             return None, "Error: Failed to decode image."
         return img, None
 
-    def describe_image(self, path: str) -> str:
+    def describe_image(self, path: str = None, use_last_capture: bool = False) -> str:
         """
-        Placeholder for BLIP-2 Integration.
+        Describes an image using llava vision model.
+        
+        Args:
+            path: Path to the image file
+            use_last_capture: If True, use the most recent screenshot
         """
-        return "Image description feature requires BLIP-2 integration (Phase 3 pending)."
+        import glob
+        import base64
+        import requests
+        
+        # If use_last_capture, find the most recent screenshot
+        if use_last_capture or not path:
+            captures_dir = os.path.join(os.getcwd(), "captures")
+            if os.path.exists(captures_dir):
+                files = glob.glob(os.path.join(captures_dir, "screenshot_*.png"))
+                if files:
+                    path = max(files, key=os.path.getmtime)
+                    self.logger.info(f"Using last capture: {path}")
+        
+        if not path:
+            return "No image provided and no recent screenshots found."
+            
+        if not os.path.exists(path):
+            return f"Error: Image not found at {path}"
+        
+        try:
+            # Optimize image size before sending to LLM
+            with Image.open(path) as img:
+                # Resize if too large (max 1024px dimension) to speed up processing
+                if max(img.size) > 1024:
+                    ratio = 1024 / max(img.size)
+                    new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
+                
+                # Save to buffer
+                import io
+                buffered = io.BytesIO()
+                img.save(buffered, format="PNG")
+                image_data = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            
+            # Call llava via Ollama
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": "llava:latest",
+                    "prompt": "Describe what you see in this image in detail. Be specific about any text, UI elements, applications, or content visible.",
+                    "images": [image_data],
+                    "stream": False
+                },
+                timeout=300
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                description = result.get("response", "Could not generate description.")
+                return description
+            else:
+                self.logger.error(f"Ollama llava error: {response.status_code}")
+                return f"Vision analysis failed: HTTP {response.status_code}"
+                
+        except requests.exceptions.ConnectionError:
+            return "Error: Cannot connect to Ollama. Please ensure Ollama is running."
+        except Exception as e:
+            self.logger.error(f"describe_image error: {e}")
+            return f"Error analyzing image: {e}"
 
     def detect_faces(self, path: str) -> str:
         img, err = self._load_image(path)

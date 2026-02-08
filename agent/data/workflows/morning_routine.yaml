@@ -1,0 +1,42 @@
+# Morning Routine Workflow
+# Demonstrates skill-aware workflow definition
+
+name: morning_routine
+description: "Start the day with music and email check"
+trigger: "start my morning"
+
+params:
+  playlist: "lofi beats"
+
+steps:
+  - skill: desktop
+    action: launch
+    params:
+      app_name: spotify
+
+  - skill: desktop
+    action: spotify_play
+    params: {}
+
+  - skill: browser
+    action: navigate
+    params:
+      url: "https://mail.google.com"
+
+  - skill: browser
+    action: wait
+    params:
+      selector: ".zA"
+      timeout: 10000
+
+  - skill: browser
+    action: scrape
+    params:
+      selector: ".bsU"
+    save_as: unread_indicator
+
+  # Note: voice skill would be added in a future phase
+  # - skill: voice
+  #   action: speak
+  #   params:
+  #     text: "You have emails waiting. Good morning!"
