@@ -21,6 +21,7 @@ class ToolRouter:
         
         # Initialize components
         self._init_tools()
+        self.learning_manager = None
 
     def _init_tools(self):
         self.os_tools = OSTools()
@@ -199,6 +200,11 @@ class ToolRouter:
         self.tools[tool_name] = handler
         self.logger.info(f"Registered tool: {tool_name}")
 
+
+    def inject_learning_manager(self, manager: Any):
+        """Inject learning manager."""
+        self.learning_manager = manager
+
     def route(self, intent: Intent) -> Any:
         """
         Routes the intent to the appropriate tool.
@@ -206,6 +212,10 @@ class ToolRouter:
         if not intent.tool_name:
             return f"No tool specified for action: {intent.action}"
 
+        # LEARNING: Check if we have a better tool suggestion from patterns
+        # (This is a placeholder for future smart routing)
+        # if self.learning_manager: ...
+        
         handler = self.tools.get(intent.tool_name)
         if not handler:
             return f"Tool not found: {intent.tool_name}"
@@ -232,7 +242,12 @@ class ToolRouter:
             if missing_params:
                 return f"Error: Missing required parameters for {intent.tool_name}: {', '.join(missing_params)}"
 
-            return handler(**valid_params)
+            result = handler(**valid_params)
+            
+            # LEARNING: We could log routing success here, but skills handle their own logging.
+            return result
+            
         except Exception as e:
             self.logger.error(f"Error executing tool {intent.tool_name}: {e}")
             return f"Error: {str(e)}"
+

@@ -53,6 +53,11 @@ class SkillRouter:
         
         # Execution context that persists across calls
         self._context: Dict[str, Any] = {}
+
+    @property
+    def skills(self) -> Dict[str, BaseSkill]:
+        """Alias for skill_loader.get_all() for backward compatibility."""
+        return self.skill_loader.get_all()
     
     def initialize(self) -> None:
         """Initialize the router and load all skills."""

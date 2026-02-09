@@ -10,6 +10,7 @@ This is the "brain" of the Clowbot-class agent, providing:
 
 import logging
 import json
+import re
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from enum import Enum
@@ -351,17 +352,98 @@ class PlanningSkill(BaseSkill):
             ))
         
         elif task_lower.startswith("go to ") or task_lower.startswith("navigate to "):
-            url = task.split("to ", 1)[1].strip()
-            if not url.startswith("http"):
-                url = f"https://{url}"
-            steps.append(PlanStep(
+            target = task.split("to ", 1)[1].strip()
+            
+            # 1. Handle compound tasks ("go to X and Y")
+            next_task = None
+            if " and " in target:
+                parts = target.split(" and ", 1)
+                target = parts[0].strip()
+                next_task = parts[1].strip()
+            
+            # 2. Map common names to URLs
+            shortcuts = {
+                "google": "https://google.com",
+                "gemini": "https://gemini.google.com",
+                "google gemini": "https://gemini.google.com", 
+                "chatgpt": "https://chatgpt.com",
+                "claude": "https://claude.ai",
+                "youtube": "https://youtube.com",
+                "github": "https://github.com",
+                "twitter": "https://twitter.com",
+                "x": "https://x.com",
+                "linkedin": "https://linkedin.com",
+                "gmail": "https://mail.google.com",
+                "calendar": "https://calendar.google.com",
+                "maps": "https://maps.google.com"
+            }
+            
+            url = shortcuts.get(target.lower(), target)
+            
+            # 3. Validation
+            # If it still has spaces and isn't a known shortcut, it's likely a search query or malformed URL
+            if " " in url and not url.startswith("http"):
+                # Treat as search instead
+                steps.append(PlanStep(
+                    id=start_id,
+                    skill="browser",
+                    action="google_search",
+                    params={"query": target},
+                    description=f"Search for: {target}"
+                ))
+            else:
+                if not url.startswith("http"):
+                    url = f"https://{url}"
+                
+                steps.append(PlanStep(
+                    id=start_id,
+                    skill="browser",
+                    action="navigate",
+                    params={"url": url},
+                    description=f"Navigate to {url}"
+                ))
+            
+            # 4. Handle next task
+            if next_task:
+                sub_steps = self._parse_single_task(next_task, start_id + 1)
+                steps.extend(sub_steps)
+        
+        elif any(verb in task_lower for verb in ["chat with", "ask", "consult"]):
+             # Extract query
+             query = task
+             for prefix in ["chat with", "ask", "consult", "tell"]:
+                 if prefix in task_lower:
+                     # Find start index of prefix (case insensitive)
+                     start_idx = task_lower.find(prefix) + len(prefix)
+                     query = task[start_idx:].strip()
+                     
+                     # Remove common AI names from start of query
+                     for name in ["gemini", "chatgpt", "claude", "ai", "bot"]:
+                         if query.lower().startswith(name):
+                             query = query[len(name):].strip()
+                     break
+             
+             # Clean up common conversational noise using regex
+             # Remove durations: "for 10 min", "for a while"
+             query = re.sub(r'for \d+ (min|minute|minutes|hour|hours)', '', query, flags=re.IGNORECASE)
+             query = re.sub(r'for a while', '', query, flags=re.IGNORECASE)
+             
+             # Remove "on" or "about" if at start
+             query = re.sub(r'^(on|about|regarding)\s+', '', query.strip(), flags=re.IGNORECASE)
+             
+             # Remove output requests: "and give me a detailed file", "send to telegram"
+             query = re.sub(r'(and )?(give|send|write|create) (me )?(a )?(detailed )?(file|report|document|summary)( on telegram)?', '', query, flags=re.IGNORECASE)
+             
+             query = query.strip()
+             
+             steps.append(PlanStep(
                 id=start_id,
                 skill="browser",
-                action="navigate",
-                params={"url": url},
-                description=f"Navigate to {url}"
+                action="consult_ai",
+                params={"query": query},
+                description=f"Consult AI: {query[:30]}..."
             ))
-        
+
         elif "search" in task_lower or "look up" in task_lower or "research" in task_lower:
             # Extract query
             query = task_lower

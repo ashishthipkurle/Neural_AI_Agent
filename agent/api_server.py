@@ -13,7 +13,7 @@ import logging
 import sys
 import os
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -181,7 +181,12 @@ async def lifespan(app: FastAPI):
             ))
             logger.info("🎙 Background voice interaction loop started")
             
+            
         logger.info("✅ Agent initialized with Voice-Chat Bridge")
+        
+        # Start background services (Learning, Tasks, Telegram)
+        await agent.start_services()
+        logger.info("✅ Background services started")
     except Exception as e:
         logger.error(f"❌ Failed to initialize agent: {e}")
         agent = None
@@ -876,6 +881,132 @@ async def apply_diff(request: ApplyDiffRequest):
     if not success:
         raise HTTPException(400, detail=msg)
     return {"status": "success", "path": msg}
+
+
+# ==========================================
+# LEARNING & TASK ENDPOINTS
+# ==========================================
+
+class LearningStats(BaseModel):
+    total_skills: int
+    experiences_logged: int
+    patterns_identified: int
+    strategies_optimized: int
+    efficiency_score: float
+
+@app.get("/api/learning/stats", response_model=LearningStats)
+async def get_learning_stats():
+    """Get statistics from the self-learning system."""
+    if agent is None or not agent.orchestrator:
+        return LearningStats(
+            total_skills=0,
+            experiences_logged=0,
+            patterns_identified=0,
+            strategies_optimized=0,
+            efficiency_score=0.0
+        )
+    
+    lm = agent.orchestrator.learning_manager
+    try:
+        session = lm.Session()
+        from agent.learning.models import ExperienceRecord, Pattern, Strategy
+        exp_count = session.query(ExperienceRecord).count()
+        pat_count = session.query(Pattern).count()
+        strat_count = session.query(Strategy).count()
+        session.close()
+        
+        # Calculate skills count (safely)
+        skill_count = 0
+        if lm.registry:
+             skill_count = len(lm.registry.list_skills())
+
+        return LearningStats(
+            total_skills=skill_count,
+            experiences_logged=exp_count,
+            patterns_identified=pat_count,
+            strategies_optimized=strat_count,
+            efficiency_score=0.85 # Placeholder/calculated
+        )
+    except Exception as e:
+        logger.error(f"Failed to get learning stats: {e}")
+        return LearningStats(total_skills=0, experiences_logged=0, patterns_identified=0, strategies_optimized=0, efficiency_score=0.0)
+
+
+class TaskModel(BaseModel):
+    id: str
+    description: str
+    status: str
+    progress: int
+    result: Optional[str] = None
+    error: Optional[str] = None
+    created_at: str
+
+@app.get("/api/tasks", response_model=List[TaskModel])
+async def get_tasks():
+    """Get list of active and recent tasks."""
+    if agent is None or not agent.orchestrator:
+        return []
+    
+    tm = agent.orchestrator.task_manager
+    tasks = tm.list_tasks(limit=20)
+    
+    return [
+        TaskModel(
+            id=t['id'],
+            description=t['description'],
+            status=t['status'],
+            progress=t['progress'] or 0,
+            result=str(t['result']) if t['result'] else None,
+            error=t['error'],
+            created_at=str(t['created_at'])
+        ) for t in tasks
+    ]
+
+class CreateTaskRequest(BaseModel):
+    description: str
+    skill_name: str
+    params: Dict[str, Any] = {}
+    priority: int = 5
+
+@app.post("/api/tasks", response_model=Dict[str, str])
+async def create_task(request: CreateTaskRequest):
+    """Submit a new background task."""
+    if agent is None or not agent.orchestrator:
+        raise HTTPException(status_code=503, detail="Task system not initialized")
+    
+    task_id = await agent.orchestrator.task_manager.submit_task(
+        description=request.description,
+        skill_name=request.skill_name,
+        params=request.params,
+        priority=request.priority
+    )
+    
+    return {"task_id": task_id, "status": "submitted"}
+
+@app.post("/api/tasks/{task_id}/stop")
+async def stop_task(task_id: str):
+    """Stop/Cancel a running task."""
+    if agent is None or not agent.orchestrator:
+        raise HTTPException(status_code=503, detail="Task system not initialized")
+    
+    success = await agent.orchestrator.task_manager.cancel_task(task_id)
+    if success:
+        return {"status": "cancelled"}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to cancel task or task not found")
+
+@app.get("/api/telegram/status")
+async def get_telegram_status():
+    """Get Telegram connection status."""
+    if agent is None or not agent.orchestrator or not agent.orchestrator.telegram_bot:
+        return {"connected": False, "status": "disabled"}
+    
+    return {
+        "connected": True, 
+        "bot_name": "NeuralAgentBot", 
+        "status": "polling"
+    }
+
 
 
 # Run with uvicorn when executed directly

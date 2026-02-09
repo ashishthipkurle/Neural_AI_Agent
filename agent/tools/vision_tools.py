@@ -18,12 +18,34 @@ class VisionTools:
         self.permissions = PermissionManager()
         self.logger = logging.getLogger("VisionTools")
         
+        # Load config
+        self.config = self._load_config()
+        self.vision_model = self.config.get('llm', {}).get('vision_model', "llava:latest")
+        if self.vision_model == "llava" and "latest" not in self.vision_model:
+             # Default to latest if just 'llava' is specified for backward compatibility in this tool
+             # (though 'llava' tag exists too, usually 'latest' is safer)
+             self.vision_model = "llava:latest"
+             
         # Init Vision Engines
         self.detector = FaceDetector()
         self.encoder = FaceEncoder()
         self.db = FaceDatabase()
         self.cctv = CameraStream()
         self.screen_eye = ScreenEye()
+
+    def _load_config(self):
+        """Load configuration from YAML file."""
+        import yaml
+        import os
+        config_path = "agent/config/settings.yaml"
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                expanded_content = os.path.expandvars(content)
+                return yaml.safe_load(expanded_content) or {}
+        except Exception as e:
+            self.logger.error(f"Failed to load user config: {e}")
+            return {}
 
     def set_event_callback(self, callback):
         """
@@ -131,11 +153,12 @@ class VisionTools:
                 img.save(buffered, format="PNG")
                 image_data = base64.b64encode(buffered.getvalue()).decode('utf-8')
             
-            # Call llava via Ollama
+            # Call vision model via Ollama
+            self.logger.info(f"Analyzing image with {self.vision_model}...")
             response = requests.post(
                 "http://localhost:11434/api/generate",
                 json={
-                    "model": "llava:latest",
+                    "model": self.vision_model,
                     "prompt": "Describe what you see in this image in detail. Be specific about any text, UI elements, applications, or content visible.",
                     "images": [image_data],
                     "stream": False

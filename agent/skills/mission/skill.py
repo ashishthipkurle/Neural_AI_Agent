@@ -155,15 +155,44 @@ class MissionControlSkill(BaseSkill):
             if isinstance(previous_result, dict) and "content" in previous_result:
                 # This is a formatted research report
                 content = previous_result["content"]
-                # Telegram has 4096 char limit per message, send in chunks if needed
-                if len(content) > 4000:
-                    # Send header first
-                    await self._report(final_msg)
-                    # Then send content in chunks
-                    for i in range(0, len(content), 4000):
-                        chunk = content[i:i+4000]
-                        await self._report(chunk)
-                    return SkillResult(success=True, message="Mission Complete")
+                # Telegram has 4096 char limit per message.
+                # If content is large, save to file and send document.
+                if len(content) > 3000: # Threshold for file
+                    try:
+                        # Save to file
+                        from pathlib import Path
+                        import time
+                        
+                        mission_dir = Path("agent/data/missions")
+                        mission_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        timestamp = int(time.time())
+                        filename = f"mission_report_{timestamp}.md"
+                        file_path = mission_dir / filename
+                        
+                        # Add header
+                        file_content = f"# Mission Report: {goal}\n\n"
+                        file_content += f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                        file_content += content
+                        
+                        with open(file_path, "w", encoding="utf-8") as f:
+                            f.write(file_content)
+                            
+                        # Send document
+                        await self._report(f"Mission complete. Result is too long for text, sending file: {filename}")
+                        await self._call_skill("telegram", "send_document", {
+                            "path": str(file_path),
+                            "caption": f"Mission Report: {goal}"
+                        })
+                        return SkillResult(success=True, message="Mission Complete (Sent as file)")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Failed to send file: {e}")
+                        # Fallback to chunking
+                        await self._report(final_msg)
+                        for i in range(0, len(content), 4000):
+                            chunk = content[i:i+4000]
+                            await self._report(chunk)
                 else:
                     final_msg += f"\n\n{content}"
             else:

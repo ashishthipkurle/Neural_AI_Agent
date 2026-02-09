@@ -57,11 +57,17 @@ class BaseSkill(ABC):
     Tools are private implementation details within skills.
     """
     
+
     def __init__(self):
         self.logger = logging.getLogger(f"Skill.{self.name}")
         self._loaded = False
         self._health = SkillHealth.UNAVAILABLE
-    
+        self.learning_manager = None # Injected later
+        
+    def inject_learning_manager(self, manager: Any) -> None:
+        """Inject learning manager dependency."""
+        self.learning_manager = manager
+
     @property
     @abstractmethod
     def name(self) -> str:
@@ -120,6 +126,9 @@ class BaseSkill(ABC):
         Returns:
             Confidence score 0.0-1.0. Higher = more confident.
             Return 0.0 if cannot handle.
+            
+        LEARNING ENHANCEMENT:
+        This method will be intercepted by PatternRecognizer in the future to improve matching.
         """
         pass
     
@@ -148,7 +157,93 @@ class BaseSkill(ABC):
             SkillResult with success status, data, and any context updates.
         """
         pass
-    
+        
+    async def execute_wrapper(self, action: str, params: Dict[str, Any], context: dict = None) -> SkillResult:
+        """
+        Wrapper to handle learning hooks. Call THIS instead of execute() directly.
+        """
+        import time
+        
+        # 1. Before Hook
+        context = self.before_execution(context or {})
+        start_time = time.time()
+        
+        try:
+            # 2. Execute
+            # Check if execute is async, if not wrap it
+            import inspect
+            if inspect.iscoroutinefunction(self.execute):
+                result = await self.execute(action, params, context)
+            else:
+                result = self.execute(action, params, context)
+                
+            duration = time.time() - start_time
+            
+            # 3. After Hook
+            self.after_execution(result, True, duration, action, params, context)
+            
+            return result
+        except Exception as e:
+            duration = time.time() - start_time
+            self.after_execution(None, False, duration, action, params, context, error=str(e))
+            raise e
+
+    # ==================== LEARNING HOOKS ====================
+
+    def before_execution(self, context: dict) -> dict:
+        """
+        Called before execution.
+        Can modify context based on learned strategies.
+        """
+        if self.learning_manager:
+            # Inject best strategy if available
+            strategy = self.learning_manager.strategy_optimizer.select_strategy(self.name, context)
+            context['strategy'] = strategy
+            
+            # Inject optimal parameters if available
+            # params = ... (would require params arg here, skipping for now)
+            pass
+        return context
+
+    def after_execution(self, result: Any, success: bool, duration: float, 
+                       action: str, params: dict, context: dict, error: str = None) -> None:
+        """
+        Called after execution.
+        Logs experience to LearningManager.
+        """
+        if self.learning_manager:
+            outcome = {}
+            if result and hasattr(result, 'data'):
+                outcome = {'data_summary': str(result.data)[:100]}
+            
+            self.learning_manager.record_experience(
+                skill_name=self.name,
+                action=action,
+                context={**context, 'params': params},
+                outcome=outcome,
+                success=success,
+                duration=duration,
+                error_message=error
+            )
+            
+            if success:
+                self.self_improve()
+
+    def get_proficiency(self) -> float:
+        """Get current proficiency score."""
+        if self.learning_manager:
+            return self.learning_manager.skill_registry.get_proficiency(self.name)
+        return 0.0
+
+    def self_improve(self) -> None:
+        """
+        Apply learned optimizations.
+        """
+        if self.learning_manager:
+            # Check for best practices or parameter tuning
+            # This is where the skill would update its internal config based on learning
+            pass
+
     # ==================== HEALTH & DRY-RUN ====================
     
     def health(self) -> SkillHealth:
@@ -177,3 +272,4 @@ class BaseSkill(ABC):
     
     def __repr__(self) -> str:
         return f"<Skill:{self.name} health={self.health().value}>"
+

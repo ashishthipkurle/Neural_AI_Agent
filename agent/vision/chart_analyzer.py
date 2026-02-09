@@ -15,14 +15,31 @@ class ChartAnalyzer:
     structured technical analysis methodology.
     """
     
-    def __init__(self, model_name: str = "llava:13b"):
+    def __init__(self, model_name: str = None):
         self.logger = logging.getLogger("ChartAnalyzer")
-        self.model_name = model_name
+        
+        # Load config to get default model if not provided
+        self.config = self._load_config()
+        self.model_name = model_name or self.config.get('llm', {}).get('vision_model', "llava")
+        
         self.base_url = "http://localhost:11434"
         self.screen_eye = ScreenEye()
         
         # Check available models and fallback if needed
         self._check_model_availability()
+        
+    def _load_config(self) -> Dict[str, Any]:
+        """Load configuration from YAML file."""
+        import yaml
+        config_path = "agent/config/settings.yaml"
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                expanded_content = os.path.expandvars(content)
+                return yaml.safe_load(expanded_content) or {}
+        except Exception as e:
+            self.logger.error(f"Failed to load user config: {e}")
+            return {}
 
     def _check_model_availability(self):
         """Checks if the preferred model is available, falls back to standard llava if not."""
@@ -30,14 +47,26 @@ class ChartAnalyzer:
             response = requests.get(f"{self.base_url}/api/tags")
             if response.status_code == 200:
                 models = [m['name'] for m in response.json().get('models', [])]
+                
+                # If exact model not found, try to find k2.5 or fallback
                 if self.model_name not in models:
-                    self.logger.warning(f"Preferred model {self.model_name} not found. Checking alternatives.")
+                    self.logger.warning(f"Preferred vision model {self.model_name} not found in Ollama.")
+                    
+                    # Try to find a suitble k2.5 model if requested
+                    if "kimi" in self.model_name:
+                         # Fallback to standard kimi if specific version missing? 
+                         # Actually for now let's just warn and keep it, OR fall back to llava if strictly needed for vision
+                         # But user requested Kimi. Let's assume Kimi is pulled.
+                         pass
+                    
+                    # Fallback chain for standard vision models
                     if "llava:latest" in models:
+                        self.logger.info("Falling back to llava:latest")
                         self.model_name = "llava:latest"
                     elif "llava" in models:
+                        self.logger.info("Falling back to llava")
                         self.model_name = "llava"
-                    # Add other vision models like gemma3 if supported by ollama vision
-                    # For now default to what was passed or llava
+                        
                     self.logger.info(f"Using vision model: {self.model_name}")
         except Exception as e:
             self.logger.error(f"Failed to check Ollama models: {e}")

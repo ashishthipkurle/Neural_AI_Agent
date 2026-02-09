@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import AIGlobe from "./components/AIGlobe";
 import CodeEditorView from "./components/CodeEditor/CodeEditorView";
+import Dashboard from "./components/Dashboard/Dashboard";
 import { api } from "./lib/api";
 
 /* ================= TYPES ================= */
@@ -421,6 +422,7 @@ interface CommandFeedProps {
     onToggleCode: () => void;
     onToggleCamera: () => void;
     onToggleCCTV: () => void;
+    onToggleDashboard: () => void;
     liveFeedMode: "idle" | "camera" | "cctv";
 }
 
@@ -433,6 +435,7 @@ function CommandFeed({
     onToggleCode,
     onToggleCamera,
     onToggleCCTV,
+    onToggleDashboard,
     liveFeedMode
 }: CommandFeedProps) {
     const [input, setInput] = useState("");
@@ -483,7 +486,7 @@ function CommandFeed({
                     <button className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Files">
                         <FolderOpen size={18} />
                     </button>
-                    <button className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Settings">
+                    <button onClick={onToggleDashboard} className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Dashboard">
                         <Settings size={18} />
                     </button>
                 </div>
@@ -841,6 +844,7 @@ export default function NeuralInterface() {
     ]);
     const [isMuted, setIsMuted] = useState(false); // Mute toggle for mic button
     const [showCodeEditor, setShowCodeEditor] = useState(false);
+    const [showDashboard, setShowDashboard] = useState(false);
     const [audioAnalyzer, setAudioAnalyzer] = useState<AnalyserNode | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
@@ -1244,6 +1248,7 @@ export default function NeuralInterface() {
     return (
         <>
             {showCodeEditor && <CodeEditorView onClose={() => setShowCodeEditor(false)} />}
+            <Dashboard isOpen={showDashboard} onClose={() => setShowDashboard(false)} />
             <div className="min-h-screen relative overflow-hidden bg-[#020a12]">
                 <GeometricBackground />
                 <StatusHUD aiState={aiState} />
@@ -1277,6 +1282,7 @@ export default function NeuralInterface() {
                             onToggleCamera={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')}
                             onToggleCCTV={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')}
                             liveFeedMode={liveFeedMode}
+                            onToggleDashboard={() => setShowDashboard(true)}
                         />
                     </div>
                 </div>

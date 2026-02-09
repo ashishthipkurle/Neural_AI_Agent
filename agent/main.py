@@ -56,7 +56,10 @@ def load_config(config_path: str = "agent/config/settings.yaml") -> dict:
     import yaml
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f) or {}
+            content = f.read()
+            # Expand environment variables like ${VAR}
+            expanded_content = os.path.expandvars(content)
+            return yaml.safe_load(expanded_content) or {}
     except Exception as e:
         logger.error(f"Failed to load config: {e}")
         return {}
@@ -97,6 +100,7 @@ class NeuralAgent:
         self._long_term_memory = None
         self._history_manager = None
         self.active_conversation_id = None
+        self.orchestrator = None # Learning & Task Orchestrator
     
     def _init_core_systems(self):
         """Initialize core orchestration systems."""
@@ -147,6 +151,29 @@ class NeuralAgent:
             logger.error(f"✗ Core systems failed: {e}")
             raise
     
+    def _init_learning_system(self):
+        """Initialize learning and task orchestration."""
+        logger.info("Initializing Learning & Task Orchestration...")
+        try:
+            from agent.core.learning_orchestrator import LearningOrchestrator
+            self.orchestrator = LearningOrchestrator(self, self.config)
+            
+            # Inject Learning Manager into components
+            if self._tool_router and hasattr(self._tool_router, 'inject_learning_manager'):
+                self._tool_router.inject_learning_manager(self.orchestrator.learning_manager)
+            
+            # Inject into Skills (Iterate loaded skills)
+            if self._skill_router:
+                for skill in self._skill_router.skills.values():
+                    if hasattr(skill, 'inject_learning_manager'):
+                        skill.inject_learning_manager(self.orchestrator.learning_manager)
+            
+            logger.info("✓ Learning Orchestrator initialized")
+        except Exception as e:
+            logger.error(f"✗ Learning system failed: {e}")
+            # Non-fatal for now
+            pass
+
     def _init_llm(self):
         """Initialize local LLM runtime."""
         logger.info("Initializing LLM runtime...")
@@ -259,6 +286,7 @@ class NeuralAgent:
             self._init_memory()
             self._init_security()
             self._init_voice()
+            self._init_learning_system() # NEW
             
             self._initialized = True
             logger.info("=" * 60)
@@ -268,6 +296,12 @@ class NeuralAgent:
         except Exception as e:
             logger.error(f"Agent initialization failed: {e}")
             raise
+
+    async def start_services(self):
+        """Start background services (Tasks, Telegram, etc)."""
+        if self.orchestrator:
+            await self.orchestrator.start()
+
     
     async def process_input(self, user_input: str, image_data: Optional[str] = None) -> str:
         """

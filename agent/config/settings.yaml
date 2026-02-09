@@ -9,9 +9,9 @@ agent:
 llm:
   provider: "ollama"
   # Unified model for text/code tasks (Cloud connection required)
-  model_name: "gpt-oss:120b-cloud"
+  model_name: "kimi-k2.5:cloud"
   # Vision model kept for image analysis (gpt-oss is text-only)
-  vision_model: "llava"
+  vision_model: "kimi-k2.5:cloud"
   api_key: "ollama"
 
 security:
@@ -81,4 +81,21 @@ system_prompt: |
   - Hidden step-by-step internal reasoning
 
   TOOLS: Execute tasks using available tools. Do not describe - DO IT.
+
+
+learning:
+  enabled: true
+  db_path: "agent/data/learning.db"
+  save_interval_seconds: 300
+
+tasks:
+  cnt_workers: 2
+  db_path: "agent/data/tasks.db"
+  poll_interval: 1.0
+
+telegram:
+  enabled: true
+  bot_token: "${TELEGRAM_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
+  allowed_users: ["${TELEGRAM_CHAT_ID}"]
 

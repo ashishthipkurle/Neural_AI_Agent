@@ -69,10 +69,10 @@ class BrowserSkill(BaseSkill):
         },
         "gemini.google.com": {
             "name": "Gemini",
-            "input_selector": "div[role='textbox'], rich-textarea, div[contenteditable='true']",
-            "submit_selector": "button[aria-label*='Send'], button.send-button, mat-icon[data-mat-icon-name='send']",
-            "response_selector": ".model-response-text, .response-container, message-content",
-            "wait_indicator": ".loading-indicator, .running-indicator"
+            "input_selector": "rich-textarea > div, div[role='textbox'], div[contenteditable='true'], textarea, div[aria-label*='prompt']",
+            "submit_selector": "button[aria-label*='Send'], button.send-button, mat-icon[data-mat-icon-name='send'], button[aria-label*='Submit']",
+            "response_selector": ".model-response-text, .response-container, message-content, div[class*='model-response']",
+            "wait_indicator": ".loading-indicator, .running-indicator, .mat-progress-bar"
         },
         "claude.ai": {
             "name": "Claude",
@@ -198,7 +198,8 @@ class BrowserSkill(BaseSkill):
             actions=[
                 "navigate", "click", "fill", "type", "scrape", "scrape_table",
                 "screenshot", "login", "download", "wait", "scroll", "run_script",
-                "new_session", "switch_session", "close_session", "google_search", "deep_research"
+                "new_session", "switch_session", "close_session", "google_search", "deep_research",
+                "consult_ai"
             ],
             requires=["playwright"],
             permissions=["network", "cookies", "filesystem"]
@@ -339,6 +340,7 @@ class BrowserSkill(BaseSkill):
             "switch_session": self._sync_action_switch_session,
             "close_session": self._sync_action_close_session,
             "deep_research": self._sync_action_deep_research,
+            "consult_ai": self._sync_action_consult_ai,
         }
         
         handler = handlers.get(action)
@@ -975,7 +977,10 @@ class BrowserSkill(BaseSkill):
                 # GO BACK to search results
                 # ============================================================
                 page.go_back()
-                page.wait_for_load_state("networkidle", timeout=15000)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except:
+                    pass # Ignore back navigation timeouts if content is loaded
                 time.sleep(1)
                 
                 # Re-wait for results to ensure they're visible
@@ -986,18 +991,20 @@ class BrowserSkill(BaseSkill):
                 
             except Exception as e:
                 self.logger.error(f"Error processing result {i+1}: {e}")
-                combined_report += f"## Source {i+1}: [Error]\n{str(e)}\n\n---\n\n"
+                # Only add error trace if we didn't get content
+                if "## Source" not in combined_report or f"Source {i+1}" not in combined_report.split("## Source")[-1]:
+                     combined_report += f"## Source {i+1}: [Error]\n{str(e)}\n\n---\n\n"
                 
                 # Try to recover by navigating back to search
                 try:
                     page.go_back()
-                    page.wait_for_load_state("networkidle", timeout=10000)
+                    page.wait_for_load_state("domcontentloaded", timeout=10000)
                     time.sleep(1)
                 except:
                     # Navigate to search again
                     url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
                     page.goto(url)
-                    page.wait_for_load_state("networkidle")
+                    page.wait_for_load_state("domcontentloaded")
                     time.sleep(1)
         
         # ============================================================
@@ -1318,6 +1325,31 @@ class BrowserSkill(BaseSkill):
         
         return SkillHealth.READY
     
+    def _sync_action_consult_ai(self, params: Dict, context: Dict) -> SkillResult:
+        """Consult the AI chatbot on the current page."""
+        query = params.get("query") or params.get("message")
+        if not query:
+            return SkillResult(success=False, error="Query/message required")
+        
+        page = self._get_current_page()
+        
+        # Detect platform
+        platform_config = self._detect_ai_platform(page.url)
+        if not platform_config:
+            return SkillResult(success=False, error=f"Current site ({page.url}) is not a supported AI platform")
+            
+        # Consult
+        response = self._sync_consult_ai_platform(page, platform_config, query)
+        
+        if response:
+            return SkillResult(
+                success=True,
+                data={"response": response, "platform": platform_config.get("name")},
+                message=f"AI Response ({len(response)} chars)"
+            )
+        else:
+             return SkillResult(success=False, error="Failed to get response from AI")
+
     def dry_run(self, action: str, params: Dict[str, Any]) -> str:
         """Preview browser action without executing."""
         previews = {
@@ -1327,6 +1359,7 @@ class BrowserSkill(BaseSkill):
             "scrape": f"Would scrape content from: {params.get('selector', 'body')}",
             "login": f"Would attempt login at: {params.get('url', 'current page')}",
             "download": f"Would download to: {params.get('path', 'downloads/')}",
+            "consult_ai": f"Would chat with AI on current page: {params.get('query', 'unknown')[:20]}...",
         }
         
         return previews.get(action, f"Would execute: {action} with {params}")

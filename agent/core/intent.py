@@ -30,8 +30,27 @@ class IntentParser:
                 llm_config.get('model_name', 'gpt-4o'),
                 llm_config.get('provider', 'openai')
             )
+        
+        self.learning_manager = None
+
+    def inject_learning_manager(self, manager: Any):
+        """Inject learning manager."""
+        self.learning_manager = manager
+
+    def _get_learned_examples(self, user_input: str) -> str:
+        """Fetch relevant learned examples/patterns."""
+        if not self.learning_manager:
+            return ""
+        try:
+            # Placeholder: In future, semantic search for similar past successful intents
+            # patterns = self.learning_manager.pattern_recognizer.find_relevant_patterns(user_input)
+            return ""
+        except Exception:
+            return ""
+
 
     def parse(self, user_input: str) -> List[Intent]:
+
         """
         Parses input using LLM if available, otherwise regex fallback.
         Returns a LIST of intents to execute in order.
@@ -204,7 +223,10 @@ class IntentParser:
         return self._parse_fallback(user_input)
 
     def _parse_with_llm(self, user_input: str) -> List[Intent]:
-        system_context = """
+        learned_context = self._get_learned_examples(user_input)
+        
+        system_context = f"{learned_context}\n" + """
+        
         AVAILABLE TOOLS:
         - chat_tool(message): General conversation.
         - launch_app(app_name, extra_args): Launch an application.
