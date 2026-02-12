@@ -30,6 +30,18 @@ class AuditEntry:
     error: Optional[str]
     source_module: str
     session_id: str
+    
+    # Clowbot Extended Fields
+    user_id: str = "local_user"
+    intent_hash: str = ""
+    consent_token: str = ""
+    result_hash: str = ""
+    decision: str = ""
+    skill: str = ""
+    actions: Optional[List[str]] = None
+    assumptions: Optional[List[str]] = None
+    confidence: float = 0.0
+    verification_passed: bool = False
 
 
 class AuditLogger:
@@ -106,7 +118,18 @@ class AuditLogger:
         user_initiated: bool = True,
         requires_consent: bool = False,
         consent_given: bool = False,
-        source_module: str = "unknown"
+        source_module: str = "unknown",
+        # Extended fields
+        user_id: str = "local_user",
+        intent_hash: str = "",
+        consent_token: str = "",
+        result_hash: str = "",
+        decision: str = "",
+        skill: str = "",
+        actions: Optional[List[str]] = None,
+        assumptions: Optional[List[str]] = None,
+        confidence: float = 0.0,
+        verification_passed: bool = False
     ) -> str:
         """
         Log an audit entry.
@@ -122,6 +145,16 @@ class AuditLogger:
             requires_consent: Whether consent was required.
             consent_given: Whether consent was given.
             source_module: Module that generated this event.
+            user_id: ID of the user performing the action.
+            intent_hash: Hash of the user intent/input.
+            consent_token: Token from consent gate.
+            result_hash: Hash of the execution result.
+            decision: Decision made (e.g. approved/denied).
+            skill: Skill that executed the action.
+            actions: List of sub-actions or phases completed.
+            assumptions: List of assumptions made.
+            confidence: Confidence score.
+            verification_passed: Whether verification passed.
         
         Returns:
             Entry ID.
@@ -139,7 +172,18 @@ class AuditLogger:
             result=self._truncate(result, 500) if result else None,
             error=error,
             source_module=source_module,
-            session_id=self.session_id
+            session_id=self.session_id,
+            # Extended fields
+            user_id=user_id,
+            intent_hash=intent_hash,
+            consent_token=consent_token,
+            result_hash=result_hash,
+            decision=decision,
+            skill=skill,
+            actions=actions,
+            assumptions=assumptions,
+            confidence=confidence,
+            verification_passed=verification_passed
         )
         
         self._write_entry(entry)

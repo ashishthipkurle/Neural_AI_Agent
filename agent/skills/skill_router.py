@@ -47,9 +47,9 @@ class SkillRouter:
     Intent -> SkillRouter -> Skill -> (internal tools)
     """
     
-    def __init__(self, skill_loader: Optional[SkillLoader] = None):
+    def __init__(self, skill_loader: Optional[SkillLoader] = None, injectables: Dict[str, Any] = None):
         self.logger = logging.getLogger("SkillRouter")
-        self.skill_loader = skill_loader or SkillLoader()
+        self.skill_loader = skill_loader or SkillLoader(injectables=injectables)
         
         # Execution context that persists across calls
         self._context: Dict[str, Any] = {}
@@ -73,6 +73,21 @@ class SkillRouter:
         
         self.logger.info(f"Loaded {len(self.skill_loader.get_all())} skills.")
     
+    async def start(self) -> None:
+        """Start all skills (async loops)."""
+        self.logger.info("Starting all skills...")
+        for name, skill in self.skill_loader.get_all().items():
+            try:
+                # Run deferred async on_load (e.g. browser skill with Playwright)
+                if getattr(skill, '_deferred_async_load', False):
+                    self.logger.info(f"Running deferred async on_load for skill: {name}")
+                    await skill.on_load()
+                    skill._deferred_async_load = False
+                    
+                await skill.on_start()
+            except Exception as e:
+                self.logger.error(f"Failed to start skill {name}: {e}")
+
     def shutdown(self) -> None:
         """Shutdown and cleanup all skills."""
         self.logger.info("Shutting down SkillRouter...")

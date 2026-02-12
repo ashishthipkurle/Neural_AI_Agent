@@ -77,19 +77,33 @@ class TelegramBot:
         if self.notifier:
             await self.notifier.send_message(text)
             
-    async def send_document(self, document_path: str, caption: str = None):
+    async def send_document(self, document_path: str, caption: str = None, chat_id: str = None):
         """Send a document/file."""
-        if self.auth and self.application:
-            # Broadcast to all allowed users
-            for chat_id in self.auth.allowed_chat_ids:
-                try:
+        if not self.application:
+            return
+
+        import os
+        if not os.path.isabs(document_path):
+            document_path = os.path.abspath(document_path)
+
+        if not os.path.exists(document_path):
+            logger.error(f"Document not found: {document_path}")
+            return
+
+        # Determine targets
+        targets = [chat_id] if chat_id else self.auth.allowed_chat_ids
+
+        for target in targets:
+            try:
+                # Use open() context manager to ensure file is closed
+                with open(document_path, 'rb') as f:
                     await self.application.bot.send_document(
-                        chat_id=chat_id,
-                        document=open(document_path, 'rb'),
+                        chat_id=target,
+                        document=f,
                         caption=caption
                     )
-                except Exception as e:
-                    logger.error(f"Failed to send document to {chat_id}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to send document to {target}: {e}")
 
     # Webhook support methods
     def setup_webhook(self, url: str):

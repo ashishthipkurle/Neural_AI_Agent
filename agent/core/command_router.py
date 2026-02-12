@@ -57,6 +57,11 @@ class CommandRouter:
         if "telegram" in u or "check telegram" in u:
             return False
         
+        # EXCEPTION: Compound commands with conversational/complex actions go to LLM
+        # e.g. "go to chatgpt and chat with him" — "chat" needs LLM understanding
+        if " and " in u and any(k in u for k in ["chat ", "talk ", "ask ", "tell ", "discuss ", "message "]):
+            return False
+        
         # Check for simple patterns we can handle fast
         if re.search(r"^(open|launch|start)\s+", u):
             return True
@@ -161,8 +166,16 @@ class CommandRouter:
 
     async def _navigate(self, url: str) -> Dict[str, Any]:
         """Navigate to a URL."""
-        if not url.startswith("http"):
-            url = "https://" + url
+        # Resolve known site shorthand names (e.g. "chatgpt" -> "https://chatgpt.com")
+        url_lower = url.lower().strip()
+        if url_lower in self.known_websites:
+            url = self.known_websites[url_lower]
+        elif not url.startswith("http"):
+            # If it's a bare word with no dots, append .com
+            if "." not in url:
+                url = "https://www." + url + ".com"
+            else:
+                url = "https://" + url
             
         self.logger.info(f"Navigating to: {url}")
         try:

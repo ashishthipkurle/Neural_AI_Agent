@@ -111,6 +111,13 @@ class BaseSkill(ABC):
         self._loaded = False
         self._health = SkillHealth.UNAVAILABLE
         self.logger.info(f"Skill '{self.name}' unloaded.")
+
+    async def on_start(self) -> None:
+        """
+        Called after the agent event loop has started.
+        Use this to start background tasks (e.g., polling) that require an active loop.
+        """
+        pass
     
     # ==================== INTENT MATCHING ====================
     
@@ -131,6 +138,138 @@ class BaseSkill(ABC):
         This method will be intercepted by PatternRecognizer in the future to improve matching.
         """
         pass
+    
+    def match(self, intent: dict) -> bool:
+        """
+        Frozen Clowbot-class method signature.
+        
+        Determines whether this skill can handle the given intent dict.
+        Wraps the existing can_handle() method for backward compatibility.
+        
+        Args:
+            intent: Dict with at minimum an 'action' key. May also contain
+                    'parameters', 'confidence', 'reasoning', etc.
+        
+        Returns:
+            True if this skill can handle the intent, False otherwise.
+        """
+        action = intent.get("action", "")
+        context = intent.get("context")
+        confidence = self.can_handle(action, context)
+        return confidence > 0.0
+    
+    @staticmethod
+    def to_frozen_result(
+        skill_result: 'SkillResult',
+        confidence: float = 1.0,
+        logs: Optional[List[str]] = None,
+        next_actions: Optional[List[Dict[str, Any]]] = None,
+        assumptions: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Convert a SkillResult to the frozen Clowbot return payload schema.
+        
+        The frozen schema is:
+        {
+            "status": "ok" | "failed" | "in_progress",
+            "result": { ... },
+            "logs": [ ... ],
+            "next_actions": [ ... ],
+            "confidence": float  # 0.0 – 1.0
+        }
+        
+        Args:
+            skill_result: The SkillResult from execute().
+            confidence: Confidence score for this execution (0.0-1.0).
+            logs: List of log strings generated during execution.
+            next_actions: List of suggested follow-up action dicts.
+            assumptions: List of assumptions made during execution.
+        
+        Returns:
+            Frozen Clowbot-class return payload dict.
+        """
+        status = "ok" if skill_result.success else "failed"
+        
+        result_dict = {
+            "data": skill_result.data,
+            "message": skill_result.message,
+        }
+        if skill_result.error:
+            result_dict["error"] = skill_result.error
+        if skill_result.context_updates:
+            result_dict["context_updates"] = skill_result.context_updates
+        
+        payload = {
+            "status": status,
+            "result": result_dict,
+            "logs": logs or [],
+            "next_actions": next_actions or [],
+            "confidence": max(0.0, min(1.0, confidence))
+        }
+        
+        # Clowbot extension: assumption tracking
+        if assumptions:
+            payload["assumptions"] = assumptions
+        
+        return payload
+    
+    def execute_and_freeze(
+        self,
+        action: str,
+        params: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+        confidence: float = 1.0,
+        assumptions: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute an action and return the frozen Clowbot payload.
+        
+        Convenience wrapper that calls execute() and converts to frozen schema.
+        Handles both sync and async execute() methods.
+        
+        Args:
+            action: Action name.
+            params: Action parameters.
+            context: Execution context.
+            confidence: Confidence score for this execution.
+            assumptions: Assumptions made for this execution.
+        
+        Returns:
+            Frozen Clowbot-class return payload dict.
+        """
+        import inspect
+        
+        logs = []
+        logs.append(f"Executing {self.name}.{action}")
+        
+        try:
+            result = self.execute(action, params, context)
+            
+            # If execute returns a coroutine, we can't await here (sync method)
+            # Caller should use execute_wrapper for async
+            if inspect.isawaitable(result):
+                raise RuntimeError(
+                    f"execute() returned a coroutine. Use execute_wrapper() for async skills."
+                )
+            
+            logs.append(f"Completed {self.name}.{action}: {'success' if result.success else 'failed'}")
+            
+            return self.to_frozen_result(
+                result,
+                confidence=confidence,
+                logs=logs,
+                assumptions=assumptions
+            )
+        except Exception as e:
+            from agent.skills.base_skill import SkillResult
+            error_result = SkillResult(success=False, error=str(e))
+            logs.append(f"Error in {self.name}.{action}: {e}")
+            return self.to_frozen_result(
+                error_result,
+                confidence=0.0,
+                logs=logs,
+                assumptions=assumptions
+            )
     
     def get_actions(self) -> List[str]:
         """Return list of supported action names."""

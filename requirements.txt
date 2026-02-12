@@ -49,3 +49,11 @@ notion-client>=2.2.0  # Notion API
 
 # Knowledge Base / RAG (Skills)
 PyPDF2>=3.0.0
+
+# Deep Research (Visual Mode)
+ddgs>=9.10.0
+newspaper3k>=0.2.8
+lxml_html_clean>=0.1.0
+
+# Chat & Messaging
+python-telegram-bot[all]>=20.0

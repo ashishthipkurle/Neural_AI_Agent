@@ -312,6 +312,107 @@ class PlanningSkill(BaseSkill):
             
             return steps
         
+        # ===== INTERACTIVE / CONVERSATION GOALS =====
+        # Detect goals that involve navigating to a site and interacting with it
+        # e.g. "Interact with ChatGPT to discuss quantum physics"
+        interaction_keywords = ["interact with", "conversation", "discuss", "chat on", "talk to", "converse"]
+        known_sites = {
+            "chatgpt": "https://chatgpt.com",
+            "chat.openai": "https://chat.openai.com",
+            "gemini": "https://gemini.google.com",
+            "claude": "https://claude.ai",
+            "perplexity": "https://perplexity.ai",
+            "copilot": "https://copilot.microsoft.com",
+        }
+        
+        has_interaction = any(kw in goal_lower for kw in interaction_keywords)
+        detected_site = None
+        detected_url = None
+        for site_name, site_url in known_sites.items():
+            if site_name in goal_lower:
+                detected_site = site_name
+                detected_url = site_url
+                break
+        
+        if has_interaction and detected_site:
+            # Extract requested conversation duration from goal (default: 10 minutes)
+            requested_minutes = 10
+            duration_match = re.search(
+                r"(?:for\s+)?(?:approximately\s+)?(\d+)\s*(minute|minutes|min|mins|m|hour|hours|hr|hrs|h)\b",
+                goal_lower,
+                re.IGNORECASE,
+            )
+            if duration_match:
+                amount = int(duration_match.group(1))
+                unit = duration_match.group(2).lower()
+                if unit in ["hour", "hours", "hr", "hrs", "h"]:
+                    requested_minutes = max(1, amount * 60)
+                else:
+                    requested_minutes = max(1, amount)
+
+            duration_param = f"{requested_minutes}m"
+
+            # Extract the topic from the goal using regex for better precision
+            # Look for "discuss X", "about X", "on X"
+            topic_match = re.search(r'\b(discuss|about|on|regarding)\s+(.*?)(\.|for approximately|$)', goal_lower, re.IGNORECASE)
+            
+            if topic_match:
+                raw_topic = topic_match.group(2).strip()
+                # Clean up "quantum physics topics" -> "quantum physics"
+                raw_topic = re.sub(r'\b(topics|subjects)\b', '', raw_topic).strip()
+                # Formulate a natural message
+                topic = f"I would like to discuss {raw_topic}."
+            else:
+                # Fallback: clean up the whole goal if no specific pattern found
+                clean_goal = goal_lower
+                for noise in interaction_keywords + [detected_site, "interface", "for approximately", "10 minutes", "actions include"]:
+                    clean_goal = clean_goal.replace(noise, "")
+                clean_goal = re.sub(r'\s+', ' ', clean_goal).strip()
+                topic = f"Hello, I'd like to talk about {clean_goal[:100]}."
+            
+            # Step 1: Navigate to the site
+            steps.append(PlanStep(
+                id=step_id,
+                skill="browser",
+                action="navigate",
+                params={"url": detected_url},
+                description=f"Navigate to {detected_site}"
+            ))
+            step_id += 1
+            
+            # Step 2: Type the topic/question into the chat input
+            if topic:
+                steps.append(PlanStep(
+                    id=step_id,
+                    skill="browser",
+                    action="type",
+                    params={"selector": "textarea, [contenteditable='true'], input[type='text']", "text": topic},
+                    description=f"Type: {topic[:50]}..."
+                ))
+                step_id += 1
+                
+                # Step 3: Press Enter to send
+                steps.append(PlanStep(
+                    id=step_id,
+                    skill="browser",
+                    action="press_key",
+                    params={"key": "Enter"},
+                    description="Press Enter to send"
+                ))
+                step_id += 1
+
+                # Step 4: Enter conversation loop
+                steps.append(PlanStep(
+                    id=step_id,
+                    skill="browser", 
+                    action="browser_chat_loop",
+                    params={"duration": duration_param, "topic": topic},
+                    description=f"Engage in conversation loop (Read -> Reply) for {requested_minutes} mins"
+                ))
+                step_id += 1
+            
+            return steps
+        
         # ===== SIMPLE PATTERNS =====
         
         # Parse "and then" sequences
@@ -469,9 +570,9 @@ class PlanningSkill(BaseSkill):
             if "research" in task_lower or "deep" in task_lower or "find out" in task_lower:
                 steps.append(PlanStep(
                     id=start_id,
-                    skill="browser",
+                    skill="research",
                     action="deep_research",
-                    params={"query": query, "limit": 3},
+                    params={"query": query, "topic": query, "limit": 3},
                     description=f"Deep Research for: {query}"
                 ))
             else:
@@ -549,14 +650,14 @@ class PlanningSkill(BaseSkill):
                 description="Scrape page content"
             ))
         
-        elif "click" in task_lower:
-            # Extract what to click
+        elif task_lower.startswith("click ") or task_lower.startswith("click on "):
+            # Only match click at the START of the task, not buried in complex text
             target = task_lower.replace("click on", "").replace("click", "").strip()
             steps.append(PlanStep(
                 id=start_id,
                 skill="browser",
                 action="click",
-                params={"text": target},
+                params={"selector": f"text={target}", "text": target},
                 description=f"Click: {target}"
             ))
         

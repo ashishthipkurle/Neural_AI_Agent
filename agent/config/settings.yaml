@@ -99,3 +99,13 @@ telegram:
   chat_id: "${TELEGRAM_CHAT_ID}"
   allowed_users: ["${TELEGRAM_CHAT_ID}"]
 
+browser:
+  headless: false
+  stealth: true
+
+
+voice_calls:
+  twilio:
+    account_sid: "AC0e922f3cf9b941f5a460a4da59709f38"
+    auth_token: "15a9f20a566d4c6fa4047af13700aa5a"
+    from_number: "+15302876558"

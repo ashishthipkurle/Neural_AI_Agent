@@ -24,6 +24,9 @@ from typing import Optional
 from agent.core.command_router import CommandRouter # Fast Router
 from agent.core.router import ToolRouter # Tool Registry
 from agent.skills import SkillRouter # Clowbot-class Skill Router
+from agent.core.pipeline import ClowbotPipeline # Clowbot-class 8-stage pipeline
+from agent.security.destructive_action_handler import DestructiveActionHandler # Frozen destructive flow
+from agent.security.assumption_log import AssumptionLogger # Confidence logging
 
 # Add project root to path (parent of agent/) for 'agent.' imports to work
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -95,12 +98,17 @@ class NeuralAgent:
         self._audit_logger = None
         self._voice_manager = None
         self._lock_controller = None
-        self._short_term_memory = None
-        self._short_term_memory = None
-        self._long_term_memory = None
-        self._history_manager = None
+        
+        # New Core Modules
+        self.personal_memory = None  # Module 1
+        self._short_term_memory = None # Legacy placeholder
+        self._history_manager = None   # Legacy placeholder
+        self.task_manager = None     # Module 2
+        self.safety_framework = None # Module 12
+        self.learning_engine = None  # Module 11
+        self.orchestrator = None     # Module 10
+        
         self.active_conversation_id = None
-        self.orchestrator = None # Learning & Task Orchestrator
     
     def _init_core_systems(self):
         """Initialize core orchestration systems."""
@@ -109,6 +117,14 @@ class NeuralAgent:
         try:
             from agent.core.orchestrator import StateMachine, ConsentGate, CommandRouter, RollbackManager
             from agent.security.audit_log import AuditLogger
+            
+            # Module 12: Safety Framework
+            from agent.core.safety_framework import SafetyFramework
+            self.safety_framework = SafetyFramework(self.config, self.personal_memory)
+            
+            # Module 2: Persistent Task Manager
+            from agent.core.task_manager import PersistentTaskManager
+            self.task_manager = PersistentTaskManager()
             
             self._state_machine = StateMachine()
             self._audit_logger = AuditLogger()
@@ -132,9 +148,36 @@ class NeuralAgent:
             
             logger.info(f"✓ Core systems initialized (Registered {len(self._tool_router.tools)} tools)")
             
+            # Initialize Clowbot Security Components
+            self.assumption_logger = AssumptionLogger()
+            self.destructive_handler = DestructiveActionHandler(
+                consent_gate=self._consent_gate,
+                rollback_manager=self._rollback_manager,
+                audit_logger=self._audit_logger
+            )
+            logger.info("✓ Clowbot security (DestructiveHandler, AssumptionLog) initialized")
+            
             # Initialize Skill Router (Clowbot-class)
             try:
-                self._skill_router = SkillRouter()
+                # Prepare dependencies for injection
+                injectables = {
+                    'agent': self, # Allow skills to callback to agent.process_input
+                    'config': self.config,
+                    'personal_memory': self.personal_memory,
+                    'task_manager': self.task_manager,
+                    'safety_framework': self.safety_framework,
+                    'learning_engine': self.learning_engine,
+                    'config': self.config,
+                    'personal_memory': self.personal_memory,
+                    'task_manager': self.task_manager,
+                    'safety_framework': self.safety_framework,
+                    'learning_engine': self.learning_engine,
+                    'llm_runtime': self._llm_runtime,
+                    'destructive_handler': self.destructive_handler,
+                    'assumption_logger': self.assumption_logger
+                }
+                
+                self._skill_router = SkillRouter(injectables=injectables)
                 self._skill_router.initialize()
                 skills = self._skill_router.list_skills()
                 logger.info(f"✓ Skill Router initialized ({len(skills)} skills loaded)")
@@ -155,23 +198,22 @@ class NeuralAgent:
         """Initialize learning and task orchestration."""
         logger.info("Initializing Learning & Task Orchestration...")
         try:
-            from agent.core.learning_orchestrator import LearningOrchestrator
-            self.orchestrator = LearningOrchestrator(self, self.config)
+            # Module 10: Multi-Agent Orchestrator
+            from agent.core.multi_agent import MultiAgentOrchestrator
+            # Module 11: Self-Learning Engine
+            from agent.core.learning_engine import SelfLearningEngine
             
-            # Inject Learning Manager into components
-            if self._tool_router and hasattr(self._tool_router, 'inject_learning_manager'):
-                self._tool_router.inject_learning_manager(self.orchestrator.learning_manager)
+            self.learning_engine = SelfLearningEngine()
             
-            # Inject into Skills (Iterate loaded skills)
-            if self._skill_router:
-                for skill in self._skill_router.skills.values():
-                    if hasattr(skill, 'inject_learning_manager'):
-                        skill.inject_learning_manager(self.orchestrator.learning_manager)
-            
+            # Orchestrator needs LLM
+            if self._llm_runtime:
+                 self.orchestrator = MultiAgentOrchestrator(self._llm_runtime, self.personal_memory)
+            else:
+                 logger.warning("LLM not ready, skipping Orchestrator init.")
+
             logger.info("✓ Learning Orchestrator initialized")
         except Exception as e:
             logger.error(f"✗ Learning system failed: {e}")
-            # Non-fatal for now
             pass
 
     def _init_llm(self):
@@ -205,16 +247,18 @@ class NeuralAgent:
         logger.info("Initializing memory systems...")
         
         try:
-            from agent.memory.short_term import ShortTermMemory
-            from agent.memory.vector_store import VectorStore
+            from agent.memory.personal_memory import PersonalMemoryManager
             from agent.memory.history_manager import HistoryManager
             
-            self._short_term_memory = ShortTermMemory()
-            self._long_term_memory = VectorStore()
+            # Module 1: Personal Memory
+            memory_config = self.config.get('memory', {})
+            db_path = memory_config.get('db_path', "agent_data/personal_memory.db")
+            self.personal_memory = PersonalMemoryManager(db_path)
+            
+            # Legacy/Helper support
             self._history_manager = HistoryManager()
             
             # Don't auto-create session on startup.
-            # Sessions are created lazily when the user sends their first message.
             self.active_conversation_id = None
             
             logger.info("✓ Memory systems initialized")
@@ -281,12 +325,31 @@ class NeuralAgent:
             return
         
         try:
-            self._init_core_systems()
-            self._init_llm()
             self._init_memory()
+            self._init_llm()
+            self._init_core_systems() # Initializes Skills which need memory/llm
             self._init_security()
             self._init_voice()
             self._init_learning_system() # NEW
+            
+            # Helper for intent parser
+            from agent.core.intent import IntentParser
+            from agent.core.pipeline import ClowbotPipeline
+            intent_parser = IntentParser(self.config)
+            
+            # CLOWBOT PARITY: Initialize Frozen Execution Pipeline
+            self.pipeline = ClowbotPipeline(
+                intent_parser=intent_parser,
+                consent_gate=self._consent_gate,
+                safety_framework=self.safety_framework,
+                skill_router=self._skill_router,
+                command_router=self._command_router,
+                tool_router=self._tool_router,
+                audit_logger=self._audit_logger,
+                sync_broadcast=self.sync_broadcast,
+                voice_manager=self._voice_manager
+            )
+            logger.info("✓ Clowbot 8-Stage Pipeline initialized")
             
             self._initialized = True
             logger.info("=" * 60)
@@ -301,9 +364,12 @@ class NeuralAgent:
         """Start background services (Tasks, Telegram, etc)."""
         if self.orchestrator:
             await self.orchestrator.start()
+        
+        if self._skill_router:
+            await self._skill_router.start()
 
     
-    async def process_input(self, user_input: str, image_data: Optional[str] = None) -> str:
+    async def process_input(self, user_input: str, image_data: Optional[str] = None, source: str = "local") -> str:
         """
         Process user input and return response with full sync.
         
@@ -319,7 +385,6 @@ class NeuralAgent:
         if self._lock_controller and self._lock_controller.is_locked:
             return "Agent is locked. Please authenticate to unlock."
         
-        # Add to short-term memory
         # Add to short-term memory
         if self._short_term_memory:
             msg_content = user_input
@@ -376,7 +441,9 @@ class NeuralAgent:
         
         # Broadcast Processing State IMMEDIATELY
         task_id = str(uuid.uuid4()) if 'uuid' in sys.modules or 'uuid' in globals() else str(int(asyncio.get_event_loop().time()))
-        if self.sync_broadcast:
+        
+        # Only broadcast if local
+        if source == "local" and self.sync_broadcast:
             self.sync_broadcast("status", "system", "Processing...", task_id)
         
         try:
@@ -386,24 +453,24 @@ class NeuralAgent:
             if self.fast_command_router and self.fast_command_router.can_handle(user_input):
                 logger.info(f"Fast routing command: {user_input}")
                 
-                # Notify UI processing
-                if self.sync_broadcast:
+                # Notify UI processing if local
+                if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Executing fast command...", task_id)
                 
                 # Execute
                 result = await self.fast_command_router.execute(user_input)
                 response_text = result.get("response", "Done.")
                 
-                # Broadcast Assistant Response
-                if self.sync_broadcast:
+                # Broadcast Assistant Response if local
+                if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("assistant", "assistant", response_text, task_id)
                 
-                # Speak (with suppression to avoid double speech)
-                if self._voice_manager:
+                # Speak (local only)
+                if source == "local" and self._voice_manager:
                      await self._voice_manager.speak(response_text, suppress_sync=True)
                 
                 # Broadcast Task Completion
-                if self.sync_broadcast:
+                if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Done", task_id)
                     
                 # Add to memory
@@ -413,9 +480,28 @@ class NeuralAgent:
                 self._state_machine.to_idle("Fast command complete")
                 return response_text
             # ---------------------------------------------------------
+            
+            # ---------------------------------------------------------
+            # CLOWBOT PIPELINE: 8-Stage Frozen Execution
+            # ---------------------------------------------------------
+            if hasattr(self, 'pipeline') and self.pipeline:
+                # Use the Clowbot-class pipeline if initialized
+                # This enforces: Input -> Intent -> Policy -> Planner -> Orch -> Skill -> Verify -> Audit -> Output
+                ctx = await self.pipeline.execute(
+                    user_input=user_input, 
+                    source=source, 
+                    image_data=image_data,
+                    user_id="local_owner" # Single user mode for now
+                )
+                
+                # The pipeline handles Voice/UI output internally in Stage 8b
+                # We just return the text response for the API/Caller
+                self._state_machine.to_idle("Pipeline execution complete")
+                return ctx.response
+            # ---------------------------------------------------------
 
             # ---------------------------------------------------------
-            # SKILL ROUTER PATH: Clowbot-class skill execution
+            # LEGACY SKILL ROUTER PATH (Fallback / Deprecated)
             # ---------------------------------------------------------
             if self._skill_router:
                 # Try to route through skill system first
@@ -423,7 +509,7 @@ class NeuralAgent:
                 if skill:
                     logger.info(f"Skill routing: {user_input} -> Skill '{skill.name}'")
                     
-                    if self.sync_broadcast:
+                    if source == "local" and self.sync_broadcast:
                         self.sync_broadcast("status", "system", f"Executing via {skill.name} skill...", task_id)
                     
                     result = await self._skill_router.route_intent(user_input)
@@ -432,15 +518,15 @@ class NeuralAgent:
                         response_text = result.result.message or str(result.result.data)
                         
                         # Broadcast Assistant Response
-                        if self.sync_broadcast:
+                        if source == "local" and self.sync_broadcast:
                             self.sync_broadcast("assistant", "assistant", response_text, task_id)
                         
                         # Speak
-                        if self._voice_manager:
+                        if source == "local" and self._voice_manager:
                             await self._voice_manager.speak(response_text, suppress_sync=True)
                         
                         # Broadcast Task Completion
-                        if self.sync_broadcast:
+                        if source == "local" and self.sync_broadcast:
                             self.sync_broadcast("status", "system", "Done", task_id)
                         
                         # Add to memory
@@ -459,7 +545,8 @@ class NeuralAgent:
             response = None
             
             # 1. ACKNOWLEDGE (Sync)
-            if any(intent.action != "chat" for intent in intents):
+            # Only acknowledge locally if strict local source
+            if source == "local" and any(intent.action != "chat" for intent in intents):
                 if self._voice_manager:
                     # VoiceManager.acknowledge now calls on_status(sync_broadcast)
                     await self._voice_manager.acknowledge()
@@ -467,17 +554,22 @@ class NeuralAgent:
             for intent in intents:
                 logger.info(f"Intent: {intent.action} -> {intent.parameters}")
                 
+                 # ISOLATION: Prevent Desktop actions if source is Telegram
+                if source == "telegram" and intent.action in ["launch_app", "move_mouse", "click_mouse", "type_text", "press_key", "telegram_gui_send"]:
+                    response = f"I cannot perform desktop actions like '{intent.action}' from Telegram. I can only perform server-side tasks."
+                    break
+
                 # Execute actions - PROGRESS (Sync via on_status in handlers or here)
                 if intent.action == "launch_app" and intent.parameters.get("app_name"):
                     app_name = intent.parameters["app_name"]
                     extra_args = intent.parameters.get("extra_args") # e.g. URL for browser
-                    if self.sync_broadcast:
+                    if source == "local" and self.sync_broadcast:
                         self.sync_broadcast("status", "system", f"Opening {app_name}", task_id)
                     response = await self._execute_launch_app(app_name, extra_args)
                     
                 elif intent.action == "browser_navigate" and intent.parameters.get("url"):
                     url = intent.parameters["url"]
-                    if self.sync_broadcast:
+                    if source == "local" and self.sync_broadcast:
                         self.sync_broadcast("status", "system", f"Navigating to {url}", task_id)
                     response = await self._execute_browser(url)
                     
@@ -494,7 +586,7 @@ class NeuralAgent:
                     # Route to DesktopSkill for GUI-based Telegram messaging
                     contact = intent.parameters.get("contact", "")
                     message = intent.parameters.get("message", "")
-                    if self.sync_broadcast:
+                    if source == "local" and self.sync_broadcast:
                         self.sync_broadcast("status", "system", f"Opening Telegram to message {contact}...", task_id)
                     
                     if self._skill_router:
@@ -506,7 +598,11 @@ class NeuralAgent:
                     else:
                         response = "Desktop skill not available"
                     
-                elif intent.action in ["chat", "chat_tool", "unknown"]:
+                elif intent.action == "chat_tool":
+                    # Use the response generated by IntentParser's LLM call
+                    response = intent.parameters.get("message")
+                    
+                elif intent.action in ["chat", "unknown"]:
                     # These will be handled by LLM response unification below
                     pass
                 
@@ -515,7 +611,7 @@ class NeuralAgent:
                     if self._command_router:
                         handler = self._command_router.get_handler(intent.action)
                         if handler:
-                            if self.sync_broadcast:
+                            if source == "local" and self.sync_broadcast:
                                 self.sync_broadcast("status", "system", f"Executing {intent.action}", task_id)
                             result = await self._command_router.route(intent.action, intent.parameters)
                             raw_response = str(result.result) if result.success else result.error
@@ -546,15 +642,15 @@ Do NOT say "according to the search results" - just answer directly."""
                     response = await self._chat_with_llm(user_input)
 
             # UNIFIED SYNC: Broadcast assistant event AND Speak
-            if self.sync_broadcast:
+            if source == "local" and self.sync_broadcast:
                 self.sync_broadcast("assistant", "assistant", response, task_id)
             
-            if self._voice_manager:
+            if source == "local" and self._voice_manager:
                 # speak is a consumer here because we already broadcasted
                 await self._voice_manager.speak(response, suppress_sync=True)
             
             # CONFIRM COMPLETION (Sync)
-            if any(intent.action != "chat" for intent in intents):
+            if source == "local" and any(intent.action != "chat" for intent in intents):
                 if self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Done", task_id)
 
@@ -571,9 +667,9 @@ Do NOT say "according to the search results" - just answer directly."""
             
         except Exception as e:
             logger.error(f"Processing error: {e}")
-            if self.sync_broadcast:
+            if source == "local" and self.sync_broadcast:
                 self.sync_broadcast("error", "system", str(e))
-            if self._voice_manager:
+            if source == "local" and self._voice_manager:
                 await self._voice_manager.speak(f"I encountered an error: {e}", suppress_sync=True)
             self._state_machine.to_error(str(e))
             self._state_machine.recover()
@@ -670,6 +766,9 @@ Do NOT say "according to the search results" - just answer directly."""
         print("  Type 'quit' or 'exit' to stop")
         print("  Type 'lock' to lock the agent")
         print("=" * 60 + "\n")
+        
+        # Start background services
+        await self.start_services()
         
         while True:
             try:

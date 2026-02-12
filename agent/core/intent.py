@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 import json
 import logging
+import re
 
 @dataclass
 class Intent:
@@ -122,8 +123,10 @@ class IntentParser:
 
         # NUCLEAR OPTION: Mission Mode
         if "start mission" in u_lower or "mission mode" in u_lower:
-            # Extract goal from "start mission: <goal>" or "start mission <goal>"
-            goal = u_lower.replace("start mission:", "").replace("start mission", "").replace("mission mode:", "").replace("mission mode", "").strip()
+            # Extract goal from "start mission: <goal>" or "start mission <goal>" while preserving casing/content.
+            goal = user_input
+            goal = re.sub(r"(?i)^\s*start\s+mission\s*:?\s*", "", goal).strip()
+            goal = re.sub(r"(?i)^\s*mission\s+mode\s*:?\s*", "", goal).strip()
             if not goal:
                 goal = user_input  # Use full input if extraction failed
             return [Intent(
@@ -234,6 +237,9 @@ class IntentParser:
         - search_memory(query): specific recall.
         - search_online(query): Search the web via API (Google/DDG) for quick info.
         
+        - make_call(phone_number, contact_name, purpose): Initiate a real phone call via Twilio.
+        - end_call(call_sid): End an active call.
+        
         - analyze_chart(image_path, timeframe, instrument): Analyze a financial chart image.
         - analyze_screen_chart(): Capture screen and analyze visible chart.
         
@@ -255,7 +261,7 @@ class IntentParser:
         - capture_screen(): Take a screenshot.
         - lock_agent(): Lock the device/agent securely.
         
-        - start_mission(goal): Start an autonomous complex task (e.g. "Research cars", "Build a website").
+        - start_mission(goal): Start an autonomous complex task (e.g. "Research cars", "Build a website", "Sustained web interaction", "Long-running tasks").
         - telegram_send_message(message): Send a text message via Telegram API (for reporting results).
         - telegram_check_messages(): Check for new messages.
         
@@ -307,6 +313,11 @@ class IntentParser:
            - "Research cars and send report to Telegram" ->
              { "action": "start_mission", "parameters": { "goal": "Research cars" }, "confidence": 1.0, "reasoning": "Mission will handle research and Telegram reporting." }
            - IMPORTANT: Do NOT add a separate telegram_send_message when using start_mission - Mission handles its own Telegram updates automatically.
+           
+        7. IF USER WANTS TO MAKE A CALL:
+           - "Call my friend" -> { "action": "make_call", "parameters": { "contact_name": "friend" } }
+           - "Call 555-0199" -> { "action": "make_call", "parameters": { "phone_number": "555-0199" } }
+           - "Call John and ask about lunch" -> { "action": "make_call", "parameters": { "contact_name": "John", "purpose": "Ask about lunch" } }
         """
         
         try:
@@ -322,11 +333,26 @@ class IntentParser:
                     confidence=1.0, 
                     reasoning='API Quota Exceeded'
                 )]
-
-            # Normalize structure for a single intent
-            # The LLM is expected to return a single intent for now, or a list of intents.
-            # If it returns a list, we'll process the first one for simplicity in this new structure.
-            # If the LLM is designed to return multiple actions, this part needs further refinement.
+            
+            # Retry once on JSON parse errors (transient LLM failures)
+            if result.get('error') and 'error' in result and len(result) <= 2:
+                self.logger.warning(f"LLM parse error, retrying once: {result.get('error')}")
+                import time
+                time.sleep(1)
+                result = self.llm.parse_intent(user_input, system_context)
+                data = result
+                self.logger.info(f"LLM Retry Data: {data}")
+                
+                # If retry also failed, fall back to chat_tool
+                if result.get('error') and 'error' in result and len(result) <= 2:
+                    self.logger.warning(f"LLM retry also failed, falling back to chat_tool")
+                    return [Intent(
+                        action='chat',
+                        tool_name='chat_tool',
+                        parameters={'message': user_input},
+                        confidence=0.5,
+                        reasoning='LLM parse failed twice, using chat fallback'
+                    )]
             
             # Check if it's a wrapper dict with 'actions' list
             if isinstance(data, dict) and "actions" in data and isinstance(data["actions"], list):
@@ -421,12 +447,12 @@ class IntentParser:
                         )]
                     return intents
                 else:
-                    return [Intent(action="unknown", reasoning="LLM returned an empty or invalid list of actions.")]
+                    return [Intent(action="chat", tool_name="chat_tool", parameters={"message": user_input}, confidence=0.5, reasoning="LLM returned an empty or invalid list of actions.")]
             
             # If it's a single action object
             tool_name = data.get("tool") or data.get("action")
             if not tool_name: # If no action/tool, it's an unknown intent
-                return [Intent(action="unknown", reasoning="LLM returned no valid action or tool name.")]
+                return [Intent(action="chat", tool_name="chat_tool", parameters={"message": user_input}, confidence=0.5, reasoning="LLM returned no valid action or tool name.")]
 
             params = data.get("parameters") or data.get("params") or {}
 

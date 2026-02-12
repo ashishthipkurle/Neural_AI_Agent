@@ -12,6 +12,8 @@ import asyncio
 import logging
 import sys
 import os
+if os.name == 'nt':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
@@ -1007,6 +1009,205 @@ async def get_telegram_status():
         "status": "polling"
     }
 
+# ==========================================
+# VOICE CALL CONVERSATION ENDPOINTS (Twilio Webhooks)
+# ==========================================
+
+from fastapi import Request, Form
+from fastapi.responses import Response
+
+@app.api_route("/voice/answer", methods=["GET", "POST"])
+async def voice_answer(request: Request):
+    """
+    Twilio webhook: Called when the recipient answers the phone.
+    Returns TwiML with greeting + Gather for speech input.
+    """
+    from twilio.twiml.voice_response import VoiceResponse, Gather
+    from agent.skills.voice_call.voice_conversation import conversation_manager
+    
+    # Get params from query string
+    params = request.query_params
+    purpose = params.get("purpose", "check in")
+    contact_name = params.get("contact_name", "friend")
+    caller_name = params.get("caller_name", "your friend")
+    
+    # Get CallSid from Twilio's POST data or query
+    form_data = {}
+    if request.method == "POST":
+        form_data = await request.form()
+    call_sid = form_data.get("CallSid") or params.get("CallSid", f"unknown_{id(request)}")
+    
+    logger.info(f"[Voice] Call answered. SID={call_sid}, purpose='{purpose}'")
+    print(f"!!! VOICE WEBHOOK HIT: /voice/answer?call_sid={call_sid} !!!")
+    
+    # Create conversation state
+    conv = conversation_manager.create_conversation(
+        call_sid=str(call_sid),
+        purpose=purpose,
+        contact_name=contact_name,
+        caller_name=caller_name
+    )
+    
+    # Generate greeting
+    greeting = conversation_manager.generate_greeting_prompt(conv)
+    conv.add_ai_turn(greeting)
+    
+    # Build TwiML: Say greeting then Gather speech
+    response = VoiceResponse()
+    response.say(greeting, voice='Polly.Matthew', language='en-US')
+    
+    # Gather speech input from recipient
+    gather = Gather(
+        input='speech',
+        action=f'/voice/respond?call_sid={call_sid}',
+        method='POST',
+        timeout=5,
+        speech_timeout='auto',
+        language='en-IN'
+    )
+    gather.say("", voice='Polly.Matthew')  # Silence prompt to just listen
+    response.append(gather)
+    
+    # If no speech detected, ask again
+    response.say("I didn't catch that. Could you please repeat?", voice='Polly.Matthew', language='en-US')
+    response.redirect(f'/voice/answer?{request.query_params}', method='POST')
+    
+    twiml = str(response)
+    logger.info(f"[Voice] Answer TwiML: {twiml[:200]}...")
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/voice/respond")
+async def voice_respond(request: Request):
+    """
+    Twilio webhook: Called when recipient speaks.
+    Gets speech transcription, sends to LLM, returns next response.
+    """
+    from twilio.twiml.voice_response import VoiceResponse, Gather
+    from agent.skills.voice_call.voice_conversation import conversation_manager
+    from agent.core.llm_interface import LLMInterface
+    
+    form_data = await request.form()
+    call_sid = request.query_params.get("call_sid") or form_data.get("CallSid", "unknown")
+    speech_result = form_data.get("SpeechResult", "")
+    confidence = form_data.get("Confidence", "0")
+    
+    logger.info(f"[Voice] Speech received. SID={call_sid}, text='{speech_result}', confidence={confidence}")
+    print(f"!!! VOICE WEBHOOK HIT: /voice/respond?call_sid={call_sid} !!!")
+    
+    conv = conversation_manager.get_conversation(str(call_sid))
+    if not conv:
+        # Conversation not found — end gracefully
+        response = VoiceResponse()
+        response.say("I'm sorry, something went wrong. Goodbye!", voice='Polly.Matthew')
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
+    
+    # Record what the human said
+    conv.add_human_turn(speech_result)
+    
+    # Check if we should end the conversation
+    if conv.should_end():
+        farewell = conversation_manager.build_farewell(conv)
+        conv.add_ai_turn(farewell)
+        response = VoiceResponse()
+        response.say(farewell, voice='Polly.Matthew', language='en-US')
+        response.hangup()
+        conversation_manager.end_conversation(str(call_sid))
+        logger.info(f"[Voice] Conversation ended (max turns). SID={call_sid}")
+        return Response(content=str(response), media_type="application/xml")
+    
+    # Generate LLM response
+    try:
+        llm_config = {}
+        if agent and hasattr(agent, 'config'):
+            llm_config = agent.config.get('llm', {})
+        
+        llm = LLMInterface(
+            api_key=llm_config.get('api_key', 'ollama'),
+            model_name=llm_config.get('model_name', 'kimi-k2.5:cloud'),
+            provider=llm_config.get('provider', 'ollama')
+        )
+        
+        system_prompt, user_message = conversation_manager.build_llm_prompt(conv, speech_result)
+        ai_response = llm.chat(system_prompt, user_message)
+        
+        # Clean up response — remove quotes, asterisks, etc.
+        ai_response = ai_response.strip().strip('"').strip("'").replace("*", "")
+        
+        # Truncate if too long for phone
+        if len(ai_response) > 300:
+            ai_response = ai_response[:297] + "..."
+            
+    except Exception as e:
+        logger.error(f"[Voice] LLM response generation failed: {e}")
+        ai_response = "I see. Thank you for letting me know. Is there anything else?"
+    
+    conv.add_ai_turn(ai_response)
+    logger.info(f"[Voice] AI response: '{ai_response}'")
+    
+    # Check if AI decided to end (contains goodbye)
+    lower_response = ai_response.lower()
+    is_ending = any(word in lower_response for word in ["goodbye", "bye", "talk to you later", "take care"])
+    
+    response = VoiceResponse()
+    response.say(ai_response, voice='Polly.Matthew', language='en-US')
+    
+    if is_ending:
+        response.hangup()
+        conversation_manager.end_conversation(str(call_sid))
+        logger.info(f"[Voice] Conversation ended (AI said goodbye). SID={call_sid}")
+    else:
+        # Continue conversation — gather more speech
+        gather = Gather(
+            input='speech',
+            action=f'/voice/respond?call_sid={call_sid}',
+            method='POST',
+            timeout=5,
+            speech_timeout='auto',
+            language='en-IN'
+        )
+        gather.say("", voice='Polly.Matthew')
+        response.append(gather)
+        
+        # Fallback if no speech
+        response.say("Are you still there?", voice='Polly.Matthew', language='en-US')
+        gather2 = Gather(
+            input='speech',
+            action=f'/voice/respond?call_sid={call_sid}',
+            method='POST',
+            timeout=5,
+            speech_timeout='auto',
+            language='en-IN'
+        )
+        response.append(gather2)
+        response.say("Alright, I'll let them know. Goodbye!", voice='Polly.Matthew')
+        response.hangup()
+    
+    twiml = str(response)
+    logger.info(f"[Voice] Respond TwiML: {twiml[:200]}...")
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/voice/status")
+async def voice_status_callback(request: Request):
+    """Twilio status callback — logs call completion status."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "unknown")
+    call_status = form_data.get("CallStatus", "unknown")
+    
+    logger.info(f"[Voice] Call status update: SID={call_sid}, status={call_status}")
+    print(f"!!! VOICE WEBHOOK HIT: /voice/status?call_sid={call_sid}&status={call_status} !!!")
+    
+    # Clean up conversation state
+    from agent.skills.voice_call.voice_conversation import conversation_manager
+    if call_status in ["completed", "failed", "no-answer", "busy"]:
+        conv = conversation_manager.get_conversation(str(call_sid))
+        if conv:
+            logger.info(f"[Voice] Final transcript for {call_sid}: {conv.build_history_text()}")
+            conversation_manager.end_conversation(str(call_sid))
+    
+    return {"status": "ok"}
 
 
 # Run with uvicorn when executed directly
@@ -1016,6 +1217,7 @@ if __name__ == "__main__":
         "agent.api_server:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
-        log_level="info"
+        reload=False,  # Disabled: reload spawns child process that overrides event loop policy
+        log_level="info",
+        loop="asyncio"  # Force asyncio loop to respect WindowsProactorEventLoopPolicy
     )

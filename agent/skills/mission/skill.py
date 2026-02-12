@@ -5,6 +5,7 @@ Wrapper around PlanningSkill that adds resilience and Telegram updates.
 
 import logging
 import time
+import re
 from typing import Dict, Any, Optional, List
 
 from ..base_skill import BaseSkill, SkillResult, SkillManifest, SkillHealth
@@ -31,7 +32,7 @@ class MissionControlSkill(BaseSkill):
         return SkillManifest(
             name="mission",
             version="1.0.0",
-            description="Autonomous mission controller with remote reporting.",
+            description="Autonomous mission controller. Handles complex, long-running tasks, sustained web interactions, and multi-step workflows with remote reporting.",
             actions=["start_mission"],
             requires=[],
             permissions=["skills", "network"]
@@ -66,6 +67,8 @@ class MissionControlSkill(BaseSkill):
         if not goal:
             return SkillResult(success=False, error="Mission requires a goal.")
 
+        constraints = self._extract_goal_constraints(goal)
+
         await self._report(f"Mission: {goal}")
 
         # 1. Decompose Goal (using PlanningSkill)
@@ -76,6 +79,7 @@ class MissionControlSkill(BaseSkill):
 
         plan = plan_result.data.get("plan") if plan_result.data else {}
         steps = plan.get("steps", []) if plan else []
+        steps = self._apply_constraints_to_steps(steps, constraints)
         
         await self._report(f"Plan: {len(steps)} steps.", silent=True)
 
@@ -102,15 +106,17 @@ class MissionControlSkill(BaseSkill):
             # Execute with AUTO-RETRY
             step_result = None
             last_error = None
+            is_browser_chat_loop = (skill == "browser" and action == "browser_chat_loop")
+            step_max_retries = 1 if is_browser_chat_loop else MAX_RETRIES
             
-            for attempt in range(1, MAX_RETRIES + 1):
+            for attempt in range(1, step_max_retries + 1):
                 step_result = await self._call_skill(skill, action, step_params, step_context)
                 
                 if step_result.success:
                     break
                 else:
                     last_error = step_result.error
-                    if attempt < MAX_RETRIES:
+                    if attempt < step_max_retries:
                         self.logger.warning(f"Step {step_id} failed (attempt {attempt}): {last_error}. Retrying...")
                         import asyncio
                         await asyncio.sleep(1 + attempt)  # Increasing backoff
@@ -120,6 +126,13 @@ class MissionControlSkill(BaseSkill):
                 await self._report(f"Step {step_id} done.", silent=True)
                 step_index += 1
             else:
+                if is_browser_chat_loop:
+                    # Do not reroute/retry this long-running step endlessly.
+                    await self._report(f"Step {step_id} completed with interruptions: {last_error}")
+                    previous_result = step_result.data if step_result and step_result.data else {"error": last_error}
+                    step_index += 1
+                    continue
+
                 # NEVER-STOP-UNTIL-DONE: Attempt reroute
                 if reroute_count < MAX_REROUTES:
                     reroute_count += 1
@@ -146,13 +159,53 @@ class MissionControlSkill(BaseSkill):
                     step_index += 1
                 else:
                     await self._report(f"Step {step_id} failed after {MAX_RETRIES} attempts and {MAX_REROUTES} reroutes: {last_error}")
+
+                    # If failed step produced a partial report/transcript, try to send it.
+                    try:
+                        if step_result and isinstance(step_result.data, dict):
+                            partial_report_path = step_result.data.get("report_path")
+                            partial_content = step_result.data.get("content")
+
+                            if partial_report_path:
+                                await self._report("Mission failed, but sending partial report...")
+                                await self._call_skill("telegram", "send_document", {
+                                    "path": partial_report_path,
+                                    "caption": f"Partial Mission Report: {goal}"
+                                })
+                            elif partial_content:
+                                snippet = str(partial_content)
+                                if len(snippet) > 3500:
+                                    snippet = snippet[:3500] + "..."
+                                await self._report(f"Mission failed, partial output:\n\n{snippet}")
+                    except Exception as report_err:
+                        self.logger.warning(f"Failed to send partial mission report: {report_err}")
+
                     return SkillResult(success=False, error=f"Mission failed at step {step_id}")
 
         # Report final result if available
         final_msg = f"Mission Complete: {goal}"
         if previous_result:
-            # Extract clean content from research result
-            if isinstance(previous_result, dict) and "content" in previous_result:
+            # Case 1: Result has a report file (e.g. Deep Research)
+            if isinstance(previous_result, dict) and "report_path" in previous_result:
+                report_path = previous_result["report_path"]
+                summary = previous_result.get("summary", "Research completed.")
+                
+                # Send summary first
+                await self._report(f"{final_msg}\n\nSummary: {summary}\n\nSending full report...")
+                
+                # Send the file
+                try:
+                    await self._call_skill("telegram", "send_document", {
+                        "path": report_path,
+                        "caption": f"Mission Report: {goal}"
+                    })
+                    return SkillResult(success=True, message="Mission Complete (Report sent)")
+                except Exception as e:
+                    self.logger.error(f"Failed to send report file: {e}")
+                    final_msg += f"\n\n(Failed to send report file: {e}. Path: {report_path})"
+
+            # Case 2: Result has direct content
+            elif isinstance(previous_result, dict) and "content" in previous_result:
                 # This is a formatted research report
                 content = previous_result["content"]
                 # Telegram has 4096 char limit per message.
@@ -245,3 +298,44 @@ class MissionControlSkill(BaseSkill):
 
     def health(self) -> SkillHealth:
         return SkillHealth.READY
+
+    def _extract_goal_constraints(self, goal: str) -> Dict[str, Any]:
+        """Extract explicit execution constraints from user goal text."""
+        goal_lower = goal.lower()
+        constraints: Dict[str, Any] = {}
+
+        duration_match = re.search(
+            r"(?:for\s+)?(?:approximately\s+)?(\d+)\s*(minute|minutes|min|mins|m|hour|hours|hr|hrs|h)\b",
+            goal_lower,
+            re.IGNORECASE,
+        )
+        if duration_match:
+            amount = int(duration_match.group(1))
+            unit = duration_match.group(2).lower()
+            if unit in ["hour", "hours", "hr", "hrs", "h"]:
+                constraints["duration_minutes"] = max(1, amount * 60)
+            else:
+                constraints["duration_minutes"] = max(1, amount)
+
+        if "telegram" in goal_lower:
+            constraints["report_channel"] = "telegram"
+
+        return constraints
+
+    def _apply_constraints_to_steps(self, steps: List[Dict[str, Any]], constraints: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Apply extracted constraints onto generated plan steps before execution."""
+        if not steps:
+            return steps
+
+        duration_minutes = constraints.get("duration_minutes")
+        if duration_minutes is None:
+            return steps
+
+        for step in steps:
+            if step.get("skill") == "browser" and step.get("action") == "browser_chat_loop":
+                params = step.get("params") or {}
+                params["duration"] = f"{duration_minutes}m"
+                step["params"] = params
+                step["description"] = f"Engage in conversation loop (Read -> Reply) for {duration_minutes} mins"
+
+        return steps

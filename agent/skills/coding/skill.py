@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from agent.skills.base_skill import BaseSkill, SkillResult
 import os
 

@@ -11,7 +11,7 @@ import os
 import importlib
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, Any
 
 from .base_skill import BaseSkill, SkillHealth, SkillManifest
 
@@ -25,8 +25,9 @@ class SkillLoader:
     2. (Future) Plugin skills from agent/plugins/
     """
     
-    def __init__(self, skills_dir: Optional[Path] = None):
+    def __init__(self, skills_dir: Optional[Path] = None, injectables: Dict[str, Any] = None):
         self.logger = logging.getLogger("SkillLoader")
+        self.injectables = injectables or {}
         
         # Default to agent/skills/
         if skills_dir is None:
@@ -119,8 +120,41 @@ class SkillLoader:
         
         try:
             skill_class = self._discovered[skill_name]
-            skill = skill_class()
-            skill.on_load()
+            
+            # fast dependency injection
+            import inspect
+            sig = inspect.signature(skill_class.__init__)
+            params = {}
+            
+            for param_name, search_param in sig.parameters.items():
+                if param_name == 'self':
+                    continue
+                
+                # Check directly in injectables
+                if param_name in self.injectables:
+                    params[param_name] = self.injectables[param_name]
+                
+                # Check by type hint if possible
+                elif search_param.annotation != inspect.Parameter.empty:
+                     for obj in self.injectables.values():
+                         if isinstance(obj, search_param.annotation):
+                             params[param_name] = obj
+                             break
+            
+            # If config is needed but not found, inject generic empty dict to prevent failure
+            if 'config' in sig.parameters and 'config' not in params:
+                params['config'] = self.injectables.get('config', {})
+                
+            skill = skill_class(**params)
+            
+            # Handle both sync and async on_load
+            import asyncio
+            result = skill.on_load()
+            if asyncio.iscoroutine(result):
+                # Schedule async on_load - it will run when the event loop is available
+                # Store for deferred initialization during on_start
+                skill._deferred_async_load = True
+                self.logger.info(f"Skill '{skill_name}' has async on_load - will initialize during start()")
             
             self._skills[skill_name] = skill
             self.logger.info(f"Loaded skill: {skill_name}")
