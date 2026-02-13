@@ -36,7 +36,9 @@ export default function TaskView() {
     useEffect(() => {
         fetchTasks();
         const interval = setInterval(fetchTasks, 2000);
-        return () => clearInterval(interval);
+        return () => {
+            clearInterval(interval);
+        };
     }, []);
 
     const handleCreateTask = async (e: React.FormEvent) => {

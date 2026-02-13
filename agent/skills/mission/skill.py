@@ -18,10 +18,12 @@ class MissionControlSkill(BaseSkill):
     - start_mission: Begin an autonomous mission.
     """
 
-    def __init__(self):
+    def __init__(self, agent=None):
         super().__init__()
         self._skill_router = None # Injected
         self._telegram_skill = None # Injected or resolved via router
+        self._agent = agent
+        self._runtime_reporter = None
 
     @property
     def name(self) -> str:
@@ -41,6 +43,10 @@ class MissionControlSkill(BaseSkill):
     def set_skill_router(self, router):
         self._skill_router = router
         self.logger.info(f"MissionSkill received router: {type(router).__name__}")
+
+    def set_runtime_reporter(self, reporter):
+        """Inject runtime reporter callback for live UI/WebSocket updates."""
+        self._runtime_reporter = reporter
 
     def can_handle(self, intent: str, context: Optional[Dict] = None) -> float:
         intent_lower = intent.lower()
@@ -284,9 +290,12 @@ class MissionControlSkill(BaseSkill):
              return SkillResult(success=False, error=f"Call failed: {e}")
 
     async def _report(self, message: str, silent: bool = False) -> None:
-        """Send update to Telegram (and log)."""
+        """Send update to live UI + Telegram (Telegram can be silenced)."""
         self.logger.info(f"MISSION REPORT: {message}")
-        
+
+        # Always send to live UI stream when available.
+        self._emit_runtime_update(message)
+
         if silent:
             return
 
@@ -295,6 +304,20 @@ class MissionControlSkill(BaseSkill):
             await self._call_skill("telegram", "send_message", {"message": message})
         except Exception as e:
             self.logger.warning(f"Failed to report to Telegram: {e}")
+
+    def _emit_runtime_update(self, message: str) -> None:
+        """Emit mission progress to websocket listeners via runtime reporter."""
+        reporter = self._runtime_reporter
+        if reporter is None and self._agent is not None:
+            reporter = getattr(self._agent, "sync_broadcast", None)
+
+        if not reporter:
+            return
+
+        try:
+            reporter("action", "system", f"[Mission] {message}")
+        except Exception as exc:
+            self.logger.debug(f"Runtime report skipped: {exc}")
 
     def health(self) -> SkillHealth:
         return SkillHealth.READY

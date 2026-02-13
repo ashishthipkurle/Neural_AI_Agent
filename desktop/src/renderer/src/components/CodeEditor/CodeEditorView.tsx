@@ -27,6 +27,7 @@ interface OpenFile {
 
 interface CodeEditorViewProps {
     onClose: () => void;
+    initialProjectPath?: string | null;
 }
 
 interface MenuItem {
@@ -47,7 +48,7 @@ const getLanguage = (filename: string): string => {
     return langMap[ext] || 'plaintext';
 };
 
-export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
+export default function CodeEditorView({ onClose, initialProjectPath = null }: CodeEditorViewProps) {
     const [rootPath, setRootPath] = useState<string | null>(null);
     const [fileTree, setFileTree] = useState<FileNode[]>([]);
     const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
@@ -170,6 +171,12 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
             console.error('Failed to restore session:', e);
         }
 
+        // Prefer explicit project path from parent for newly generated projects
+        if (initialProjectPath && !sessionLoaded) {
+            openProjectFolder(initialProjectPath);
+            return;
+        }
+
         // Load default generated folder contents if no session file tree
         if (!sessionLoaded) {
             loadDefaultFolder();
@@ -257,31 +264,72 @@ export default function CodeEditorView({ onClose }: CodeEditorViewProps) {
                 saveProjectHistory(rootPath, agentMessages);
             }
 
+            // Clear stale tree immediately while new folder is loading
+            setFileTree([]);
             setRootPath(folderPath);
             loadProjectHistory(folderPath);
 
             if (window.electronAPI?.fs) {
-                const entries = await window.electronAPI.fs.listDir(folderPath);
-                const items: FileNode[] = entries.map(entry => ({
-                    name: entry.name,
-                    path: entry.path,
-                    type: entry.type === 'directory' ? 'folder' : 'file',
-                    children: entry.type === 'directory' ? [] : undefined,
+                let lastError: any = null;
+
+                for (let attempt = 0; attempt < 5; attempt++) {
+                    try {
+                        const entries = await window.electronAPI.fs.listDir(folderPath);
+                        const items: FileNode[] = entries.map(entry => ({
+                            name: entry.name,
+                            path: entry.path,
+                            type: entry.type === 'directory' ? 'folder' : 'file',
+                            children: entry.type === 'directory' ? [] : undefined,
+                            expanded: false,
+                        }));
+
+                        items.sort((a, b) => {
+                            if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+                            return a.name.localeCompare(b.name);
+                        });
+
+                        setFileTree(items);
+                        console.log('✅ Loaded', items.length, 'items from', folderPath);
+                        return;
+                    } catch (error) {
+                        lastError = error;
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                    }
+                }
+
+                console.warn('Electron listDir failed after retries, trying backend fallback:', lastError);
+            }
+
+            const response = await fetch(`http://localhost:8000/api/list-files?directory=${encodeURIComponent(folderPath)}`);
+            if (response.ok) {
+                const data = await response.json();
+                const nodes: FileNode[] = (data.files || []).map((f: any) => ({
+                    name: f.name,
+                    path: `${folderPath}\\${f.name}`,
+                    type: f.isDirectory ? 'folder' : 'file',
+                    children: f.isDirectory ? [] : undefined,
                     expanded: false,
                 }));
 
-                items.sort((a, b) => {
+                nodes.sort((a, b) => {
                     if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
                     return a.name.localeCompare(b.name);
                 });
 
-                setFileTree(items);
-                console.log('✅ Loaded', items.length, 'items from', folderPath);
+                setFileTree(nodes);
+                console.log('✅ Loaded', nodes.length, 'items from backend fallback for', folderPath);
             }
         } catch (err) {
             console.error('Failed to open folder:', err);
+            setFileTree([]);
         }
     };
+
+    useEffect(() => {
+        if (!initialProjectPath) return;
+        if (initialProjectPath === rootPath) return;
+        openProjectFolder(initialProjectPath);
+    }, [initialProjectPath]);
 
     // Handle folder selection - uses Electron IPC for proper file system access
     const handleSelectFolder = async () => {

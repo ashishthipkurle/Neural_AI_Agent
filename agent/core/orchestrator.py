@@ -14,7 +14,10 @@ import logging
 import yaml
 from typing import Optional, List, Any, Dict
 
-from agent.core.orchestrator import StateMachine, AgentState, ConsentGate, CommandRouter, RollbackManager
+from agent.core.orchestrator.state_machine import StateMachine, AgentState
+from agent.core.orchestrator.consent_gate import ConsentGate
+from agent.core.orchestrator.command_router import CommandRouter
+from agent.core.orchestrator.rollback import RollbackManager
 from agent.core.brain import Planner, ReasoningEngine, MemoryInjector
 from agent.core.llm import LocalLLMRuntime, LLMBackend, ToolRegistry
 from agent.core.router import ToolRouter

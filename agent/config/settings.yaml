@@ -16,7 +16,7 @@ llm:
 
 security:
   safe_mode: false
-  auto_approval: true  # USER-GRANTED: Full autonomous execution enabled
+  auto_approval: false
   allowed_paths:
     - "D:/"
     - "C:/"

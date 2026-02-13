@@ -311,6 +311,39 @@ class PlanningSkill(BaseSkill):
             ))
             
             return steps
+
+        # ===== CODING / WEBSITE BUILD GOALS =====
+        coding_creation_verbs = ["create", "build", "make", "develop", "generate"]
+        react_website_markers = [
+            "react", "react.js", "reactjs", "website", "web app", "webapp",
+            "landing page", "frontend", "product catalog", "homepage"
+        ]
+        has_coding_creation_goal = any(v in goal_lower for v in coding_creation_verbs) and any(
+            marker in goal_lower for marker in react_website_markers
+        )
+
+        if has_coding_creation_goal:
+            project_name = "react_business_site"
+            project_match = re.search(r"for\s+(?:my\s+)?([a-z0-9\s\-]+?)\s+(?:business|company|store)\b", goal_lower)
+            if project_match:
+                base_name = project_match.group(1).strip()
+                project_name = re.sub(r"[^a-z0-9]+", "_", base_name).strip("_") or project_name
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="coding",
+                action="scaffold_react_website",
+                params={
+                    "goal": goal,
+                    "project_name": project_name,
+                    "install_dependencies": True,
+                    "run_dev_server": True,
+                    "open_in_editor": False,
+                },
+                description=f"Scaffold React website project: {project_name}"
+            ))
+
+            return steps
         
         # ===== INTERACTIVE / CONVERSATION GOALS =====
         # Detect goals that involve navigating to a site and interacting with it

@@ -25,6 +25,7 @@ import json
 from datetime import datetime
 from datetime import datetime
 import uuid
+from agent.core.architecture_conformance import build_conformance_report
 
 # Safety & Intent Modules
 from agent.core.file_safety import start_gate as file_guard
@@ -152,6 +153,22 @@ async def lifespan(app: FastAPI):
 
         agent.sync_broadcast = sync_broadcast
         agent.initialize()
+
+        # Wire mission progress to websocket stream for visible step-by-step UI updates.
+        try:
+            tool_router = getattr(agent, '_tool_router', None)
+            tool_mission_skill = getattr(tool_router, '_mission_skill', None) if tool_router else None
+            if tool_mission_skill and hasattr(tool_mission_skill, 'set_runtime_reporter'):
+                tool_mission_skill.set_runtime_reporter(sync_broadcast)
+
+            skill_router = getattr(agent, '_skill_router', None)
+            skill_mission_skill = None
+            if skill_router and getattr(skill_router, 'skill_loader', None):
+                skill_mission_skill = skill_router.skill_loader.get('mission')
+            if skill_mission_skill and hasattr(skill_mission_skill, 'set_runtime_reporter'):
+                skill_mission_skill.set_runtime_reporter(sync_broadcast)
+        except Exception as wire_exc:
+            logger.warning(f"⚠ Could not wire mission runtime reporter: {wire_exc}")
         
         # Hook into VoiceManager if available
         if agent._voice_manager:
@@ -943,14 +960,34 @@ class TaskModel(BaseModel):
     error: Optional[str] = None
     created_at: str
 
+
+def _resolve_task_manager():
+    """Resolve task manager from current runtime shape."""
+    if agent is None:
+        return None
+
+    if getattr(agent, "task_manager", None):
+        return agent.task_manager
+
+    orchestrator = getattr(agent, "orchestrator", None)
+    if orchestrator and getattr(orchestrator, "task_manager", None):
+        return orchestrator.task_manager
+
+    return None
+
 @app.get("/api/tasks", response_model=List[TaskModel])
 async def get_tasks():
     """Get list of active and recent tasks."""
-    if agent is None or not agent.orchestrator:
+    task_manager = _resolve_task_manager()
+    if task_manager is None:
         return []
-    
-    tm = agent.orchestrator.task_manager
-    tasks = tm.list_tasks(limit=20)
+
+    if hasattr(task_manager, "list_tasks"):
+        tasks = task_manager.list_tasks(limit=20)
+    elif hasattr(task_manager, "list_active_tasks"):
+        tasks = task_manager.list_active_tasks()
+    else:
+        tasks = []
     
     return [
         TaskModel(
@@ -973,29 +1010,40 @@ class CreateTaskRequest(BaseModel):
 @app.post("/api/tasks", response_model=Dict[str, str])
 async def create_task(request: CreateTaskRequest):
     """Submit a new background task."""
-    if agent is None or not agent.orchestrator:
+    task_manager = _resolve_task_manager()
+    if task_manager is None:
         raise HTTPException(status_code=503, detail="Task system not initialized")
-    
-    task_id = await agent.orchestrator.task_manager.submit_task(
+
+    task_id = task_manager.submit_task(
         description=request.description,
         skill_name=request.skill_name,
         params=request.params,
         priority=request.priority
     )
+
+    if not task_id:
+        raise HTTPException(status_code=500, detail="Failed to submit task")
     
     return {"task_id": task_id, "status": "submitted"}
 
 @app.post("/api/tasks/{task_id}/stop")
 async def stop_task(task_id: str):
     """Stop/Cancel a running task."""
-    if agent is None or not agent.orchestrator:
+    task_manager = _resolve_task_manager()
+    if task_manager is None:
         raise HTTPException(status_code=503, detail="Task system not initialized")
-    
-    success = await agent.orchestrator.task_manager.cancel_task(task_id)
+
+    success = task_manager.cancel_task(task_id)
     if success:
         return {"status": "cancelled"}
     else:
         raise HTTPException(status_code=400, detail="Failed to cancel task or task not found")
+
+
+@app.get("/api/architecture/conformance")
+async def get_architecture_conformance():
+    """Return architecture conformance summary (implemented/partial/missing)."""
+    return build_conformance_report()
 
 @app.get("/api/telegram/status")
 async def get_telegram_status():

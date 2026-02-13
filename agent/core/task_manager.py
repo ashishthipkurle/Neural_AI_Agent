@@ -107,6 +107,26 @@ class PersistentTaskManager:
             self.logger.error(f"Error creating task: {e}")
             return ""
 
+    def submit_task(
+        self,
+        description: str,
+        skill_name: str,
+        params: Optional[Dict[str, Any]] = None,
+        priority: int = 5
+    ) -> str:
+        """Compatibility adapter for task API callers.
+
+        Maps `skill_name` -> `goal_type` and stores params as checkpoint payload.
+        """
+        task_id = self.create_task(
+            description=description,
+            goal_type=skill_name,
+            priority=priority
+        )
+        if task_id and params:
+            self.checkpoint(task_id, {"params": params, "skill_name": skill_name})
+        return task_id
+
     def decompose_task(self, task_id: str) -> List[str]:
         """Use LLM to break into subtasks. Returns subtask_ids"""
         # Placeholder for LLM integration. In real impl, would call llm.generate()
@@ -178,10 +198,33 @@ class PersistentTaskManager:
             with self._get_connection() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("SELECT * FROM tasks WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')")
-                return [dict(row) for row in cursor]
+                return [self._normalize_task_row(dict(row)) for row in cursor]
         except Exception as e:
             self.logger.error(f"Error listing active tasks: {e}")
         return []
+
+    def list_tasks(self, limit: int = 20) -> List[dict]:
+        """Return recent tasks (active first), compatible with API models."""
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    """
+                    SELECT * FROM tasks
+                    ORDER BY
+                        CASE
+                            WHEN status IN ('RUNNING', 'PENDING', 'PAUSED') THEN 0
+                            ELSE 1
+                        END,
+                        created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,)
+                )
+                return [self._normalize_task_row(dict(row)) for row in cursor]
+        except Exception as e:
+            self.logger.error(f"Error listing tasks: {e}")
+            return []
 
     def pause_task(self, task_id: str) -> None:
         """Save checkpoint, transition to PAUSED"""
@@ -192,15 +235,54 @@ class PersistentTaskManager:
         except Exception as e:
             self.logger.error(f"Error pausing task {task_id}: {e}")
 
-    def cancel_task(self, task_id: str) -> None:
+    def cancel_task(self, task_id: str) -> bool:
         """Cleanup, mark FAILED"""
         try:
             with self._get_connection() as conn:
                 # Mark as CANCELLED (better than FAILED if user requested) or FAILED per spec? Spec says mark FAILED.
-                conn.execute("UPDATE tasks SET status='FAILED', completed_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
+                cursor = conn.execute("UPDATE tasks SET status='FAILED', completed_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
+                updated = cursor.rowcount > 0
             self.logger.info(f"Cancelled task {task_id}")
+            return updated
         except Exception as e:
             self.logger.error(f"Error cancelling task {task_id}: {e}")
+            return False
+
+    def _normalize_task_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize row fields for API callers expecting common task shape."""
+        created_at = row.get("created_at")
+        started_at = row.get("started_at")
+        completed_at = row.get("completed_at")
+
+        checkpoint_data = row.get("checkpoint_data")
+        parsed_checkpoint = {}
+        if checkpoint_data:
+            try:
+                parsed_checkpoint = json.loads(checkpoint_data)
+            except Exception:
+                parsed_checkpoint = {}
+
+        status = str(row.get("status") or "PENDING").lower()
+        progress = 0
+        if status == "completed":
+            progress = 100
+        elif status in {"running", "paused"}:
+            progress = 50
+
+        return {
+            "id": row.get("id"),
+            "description": row.get("description") or "",
+            "skill_name": row.get("goal_type") or "",
+            "status": status,
+            "priority": row.get("priority", 5),
+            "parameters": parsed_checkpoint.get("params", {}),
+            "created_at": str(created_at) if created_at is not None else datetime.datetime.utcnow().isoformat(),
+            "started_at": str(started_at) if started_at is not None else None,
+            "completed_at": str(completed_at) if completed_at is not None else None,
+            "progress": progress,
+            "result": parsed_checkpoint.get("result"),
+            "error": row.get("error_message")
+        }
 
     async def _worker_loop(self):
         """Background worker: process queue, max 5 parallel, sleep 1s"""

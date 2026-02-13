@@ -486,8 +486,13 @@ function CommandFeed({
                     <button className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Files">
                         <FolderOpen size={18} />
                     </button>
-                    <button onClick={onToggleDashboard} className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Dashboard">
-                        <Settings size={18} />
+                    <button
+                        onClick={onToggleDashboard}
+                        className="px-3 py-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 transition-colors flex items-center gap-2"
+                        title="Open Dashboard"
+                    >
+                        <Settings size={16} />
+                        <span className="text-xs font-mono tracking-wide">Dashboard</span>
                     </button>
                 </div>
             </div>
@@ -844,6 +849,7 @@ export default function NeuralInterface() {
     ]);
     const [isMuted, setIsMuted] = useState(false); // Mute toggle for mic button
     const [showCodeEditor, setShowCodeEditor] = useState(false);
+    const [codeEditorProjectPath, setCodeEditorProjectPath] = useState<string | null>(null);
     const [showDashboard, setShowDashboard] = useState(false);
     const [audioAnalyzer, setAudioAnalyzer] = useState<AnalyserNode | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -945,6 +951,77 @@ export default function NeuralInterface() {
     // Video Ref lifted to parent for capture
     const videoRef = useRef<HTMLVideoElement>(null);
 
+    const extractProjectPathFromText = (value: string): string | null => {
+        if (!value) return null;
+
+        const cleanCandidate = (candidate: string): string => {
+            let cleaned = candidate.trim();
+            cleaned = cleaned.replace(/^['"]+/, '').replace(/['"]+$/, '');
+            cleaned = cleaned.replace(/[\s.,;:!?]+$/, '');
+            return cleaned;
+        };
+
+        const toLikelyProjectRoot = (candidate: string): string => {
+            const normalized = candidate.replace(/\//g, '\\');
+            const lower = normalized.toLowerCase();
+
+            const stopMarkers = ['\\src\\', '\\node_modules\\', '\\components\\'];
+            for (const marker of stopMarkers) {
+                const idx = lower.indexOf(marker);
+                if (idx > 2) {
+                    return normalized.slice(0, idx);
+                }
+            }
+
+            const parts = normalized.split('\\');
+            const last = parts[parts.length - 1] || '';
+            if (/\.[a-z0-9]+$/i.test(last)) {
+                return parts.slice(0, -1).join('\\');
+            }
+
+            return normalized;
+        };
+
+        const explicitProjectPath = value.match(/project_path['"]?\s*[:=]\s*['"]([A-Za-z]:\\[^'"\r\n,]+)['"]/i);
+        if (explicitProjectPath?.[1]) {
+            return cleanCandidate(explicitProjectPath[1]);
+        }
+
+        const windowsMatches = value.match(/[A-Za-z]:\\[^,\n\r'"<>|?*]+/g) || [];
+        const normalizedCandidates = windowsMatches
+            .map(cleanCandidate)
+            .map(toLikelyProjectRoot)
+            .filter(Boolean);
+
+        if (normalizedCandidates.length > 0) {
+            const scored = normalizedCandidates.map((candidate) => {
+                const lower = candidate.toLowerCase();
+                const parts = candidate.split('\\');
+                const last = parts[parts.length - 1] || '';
+                const hasExtension = /\.[a-z0-9]+$/i.test(last);
+
+                let score = 0;
+                if (!hasExtension) score += 4;
+                if (lower.includes('\\generated\\')) score += 3;
+                if (!lower.includes('\\src\\')) score += 2;
+                if (lower.includes('\\node_modules\\')) score -= 6;
+                score -= candidate.length * 0.001;
+
+                return { candidate, score };
+            });
+
+            scored.sort((a, b) => b.score - a.score);
+            return scored[0]?.candidate || null;
+        }
+
+        const unixMatch = value.match(/\/(?:[^\s:]+\/)*[^\s:]+/);
+        if (unixMatch?.[0] && !value.includes('http://') && !value.includes('https://')) {
+            return cleanCandidate(unixMatch[0]);
+        }
+
+        return null;
+    };
+
     // NEW: Listen for Synchronized Events from Backend (WebSocket + IPC)
     useEffect(() => {
         const handleSync = (data: any) => {
@@ -971,7 +1048,28 @@ export default function NeuralInterface() {
             if (type === "status" && lowerText.includes("processing")) setAiState("thinking");
             if (type === "status" && lowerText.includes("muted")) setAiState("idle");  // Muted = idle
             if (type === "assistant") setAiState("speaking");
+            if (type === "action") setAiState("thinking");
             if (type === "status" && text === "Done") setAiState("idle");
+
+            const detectedProjectPath = extractProjectPathFromText(text || "");
+            if (detectedProjectPath) {
+                setCodeEditorProjectPath(detectedProjectPath);
+                setShowCodeEditor(true);
+            }
+
+            // Auto-open in-app code editor for visible coding workflow.
+            if (
+                (type === "action" || type === "status") &&
+                (
+                    lowerText.includes("react") ||
+                    lowerText.includes("website") ||
+                    lowerText.includes("scaffold") ||
+                    lowerText.includes("project") ||
+                    lowerText.includes("coding")
+                )
+            ) {
+                setShowCodeEditor(true);
+            }
 
             // Handle wake event - clear partial STT messages
             if (type === "wake") {
@@ -980,7 +1078,7 @@ export default function NeuralInterface() {
             }
 
             // Sync Chat history strictly from events
-            if (type === "stt" || type === "assistant" || type === "status" || type === "error") {
+            if (type === "stt" || type === "assistant" || type === "status" || type === "error" || type === "action") {
                 setMessages((prev) => {
                     // PARTIAL STT HANDLING
                     if (type === "stt" && partial) {
@@ -1094,6 +1192,17 @@ export default function NeuralInterface() {
                         return [...withoutLoading, {
                             id: messageId,
                             role: "assistant",
+                            content: text
+                        }];
+                    }
+
+                    // ACTION EVENT: always show in command feed as live operation trace.
+                    if (type === "action") {
+                        if (!text || !text.trim()) return prev;
+                        if (prev.length > 0 && prev[prev.length - 1].content === text) return prev;
+                        return [...prev, {
+                            id: messageId,
+                            role: "system",
                             content: text
                         }];
                     }
@@ -1247,7 +1356,12 @@ export default function NeuralInterface() {
 
     return (
         <>
-            {showCodeEditor && <CodeEditorView onClose={() => setShowCodeEditor(false)} />}
+            {showCodeEditor && (
+                <CodeEditorView
+                    onClose={() => setShowCodeEditor(false)}
+                    initialProjectPath={codeEditorProjectPath}
+                />
+            )}
             <Dashboard isOpen={showDashboard} onClose={() => setShowDashboard(false)} />
             <div className="min-h-screen relative overflow-hidden bg-[#020a12]">
                 <GeometricBackground />

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Brain, List, MessageCircle, X } from 'lucide-react';
+import { Brain, List, MessageCircle, ShieldCheck, X } from 'lucide-react';
 import LearningView from './LearningView';
 import TaskView from './TaskView';
 import TelegramView from './TelegramView';
+import ConformanceView from './ConformanceView';
 
 interface DashboardProps {
     isOpen: boolean;
@@ -11,11 +12,12 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ isOpen, onClose }: DashboardProps) {
-    const [activeTab, setActiveTab] = useState<'learning' | 'tasks' | 'telegram'>('tasks');
+    const [activeTab, setActiveTab] = useState<'learning' | 'tasks' | 'telegram' | 'conformance'>('tasks');
 
     const tabs = [
         { id: 'tasks', label: 'Tasks', icon: List },
         { id: 'learning', label: 'Learning', icon: Brain },
+        { id: 'conformance', label: 'Conformance', icon: ShieldCheck },
         { id: 'telegram', label: 'Telegram', icon: MessageCircle },
     ];
 
@@ -96,6 +98,17 @@ export default function Dashboard({ isOpen, onClose }: DashboardProps) {
                             className="h-full overflow-y-auto custom-scrollbar"
                         >
                             <TelegramView />
+                        </motion.div>
+                    )}
+                    {activeTab === 'conformance' && (
+                        <motion.div
+                            key="conformance"
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -20 }}
+                            className="h-full overflow-y-auto custom-scrollbar"
+                        >
+                            <ConformanceView />
                         </motion.div>
                     )}
                 </AnimatePresence>

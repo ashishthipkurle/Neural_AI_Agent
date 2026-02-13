@@ -61,5 +61,20 @@ class TestPersistentTaskManager(unittest.TestCase):
         status = self.tm.get_task_status(task_id)
         self.assertEqual(status['status'], 'FAILED')
 
+    def test_api_compat_methods(self):
+        task_id = self.tm.submit_task(
+            description="Compat task",
+            skill_name="browser",
+            params={"url": "https://example.com"},
+            priority=4
+        )
+        self.assertTrue(task_id)
+
+        tasks = self.tm.list_tasks(limit=10)
+        self.assertTrue(any(t.get("id") == task_id for t in tasks))
+
+        cancelled = self.tm.cancel_task(task_id)
+        self.assertTrue(cancelled)
+
 if __name__ == '__main__':
     unittest.main()
