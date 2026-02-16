@@ -23,6 +23,7 @@ import logging
 import hashlib
 import time
 import uuid
+import json
 from typing import Dict, Any, Optional, List, Callable, Awaitable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -482,6 +483,43 @@ class UIVoiceOutputStage(PipelineStageBase):
         super().__init__(PipelineStage.UI_VOICE_OUTPUT.value)
         self._sync_broadcast = sync_broadcast
         self._voice_manager = voice_manager
+
+    def _humanize_response(self, response: str) -> str:
+        text = (response or "").strip()
+        if not text:
+            return "Done."
+
+        if text.startswith("[") or text.startswith("{"):
+            try:
+                payload = json.loads(text)
+            except Exception:
+                return text
+
+            if isinstance(payload, list) and payload:
+                first = payload[0] if isinstance(payload[0], dict) else None
+                if first and first.get("source") == "DowntimeVerifier":
+                    attempts = first.get("verification_attempts")
+                    down_count = first.get("down_observed_count")
+                    link = first.get("link") or first.get("url") or "the target website"
+                    consistent = first.get("is_consistently_down")
+                    if consistent:
+                        return f"Verified {link} is down across {down_count}/{attempts} checks."
+                    return f"Verified {link} was down in {down_count}/{attempts} checks, so it is not consistently down."
+
+                if first and first.get("source") == "Wikipedia":
+                    title = first.get("title", "result")
+                    snippet = (first.get("snippet") or "").strip().replace("\n", " ")
+                    if len(snippet) > 320:
+                        snippet = snippet[:320].rstrip() + "..."
+                    return f"Top result from {title}: {snippet}" if snippet else f"Found a result from {title}."
+
+        return text
+
+    def _voice_friendly_text(self, response: str) -> str:
+        text = self._humanize_response(response)
+        if len(text) > 450:
+            return text[:450].rstrip() + "..."
+        return text
     
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         # Compile response from execution results
@@ -492,21 +530,23 @@ class UIVoiceOutputStage(PipelineStageBase):
                 if msg:
                     messages.append(msg)
             ctx.response = " ".join(messages) if messages else "Done."
+
+        ctx.response = self._humanize_response(ctx.response)
         
         # Broadcast to UI
         if self._sync_broadcast and ctx.source == "local":
             self._sync_broadcast("assistant", "assistant", ctx.response, ctx.pipeline_id)
+
+        # Signal completion to UI ASAP (prevents long TTS from blocking "Processing..." clear)
+        if self._sync_broadcast and ctx.source == "local":
+            self._sync_broadcast("status", "system", "Done", ctx.pipeline_id)
         
         # Speak
         if self._voice_manager and ctx.source == "local":
             try:
-                await self._voice_manager.speak(ctx.response, suppress_sync=True)
+                await self._voice_manager.speak(self._voice_friendly_text(ctx.response), suppress_sync=True)
             except Exception as e:
                 ctx.logs.append(f"Voice output failed: {e}")
-        
-        # Signal completion to UI (clears "Agent is thinking" indicator)
-        if self._sync_broadcast and ctx.source == "local":
-            self._sync_broadcast("status", "system", "Done", ctx.pipeline_id)
         
         ctx.logs.append("Output delivered")
         return ctx

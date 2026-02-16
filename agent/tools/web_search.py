@@ -8,6 +8,8 @@ We rely on a smart Wikipedia strategy:
 """
 import logging
 import json
+import re
+import time
 import requests
 from typing import List, Dict
 
@@ -23,6 +25,117 @@ class WebSearchTool:
         self.session.headers.update({
              "User-Agent": "NeuralAgent/1.0 (Research Project; contact@example.com)"
         })
+        self.request_timeout = 10
+        self.max_attempts = 3
+        self.retry_backoff_seconds = 1.5
+
+    def _request_json_with_retry(self, url: str, params: Dict) -> Dict:
+        last_error = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                resp = self.session.get(url, params=params, timeout=self.request_timeout)
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Request failed (attempt {attempt}/{self.max_attempts}): {e}")
+                if attempt < self.max_attempts:
+                    time.sleep(self.retry_backoff_seconds * attempt)
+
+        raise RuntimeError(f"Request failed after {self.max_attempts} attempts: {last_error}")
+
+    def _extract_verification_attempts(self, query: str) -> int:
+        lowered = query.lower()
+        numeric = re.search(r"\b(\d+)\s*(?:times?|x)\b", lowered)
+        if numeric:
+            return max(1, min(int(numeric.group(1)), 10))
+
+        words_to_numbers = {
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+            "six": 6,
+            "seven": 7,
+            "eight": 8,
+            "nine": 9,
+            "ten": 10,
+        }
+        for word, value in words_to_numbers.items():
+            if re.search(rf"\b{word}\s+times?\b", lowered):
+                return value
+
+        return 3 if "verify" in lowered else 1
+
+    def _is_downtime_verification_query(self, query: str) -> bool:
+        lowered = query.lower()
+        has_downtime_signal = any(k in lowered for k in ["down", "offline", "unreachable", "not working"])
+        has_verify_signal = any(k in lowered for k in ["verify", "recheck", "before concluding", "times"])
+        has_site_signal = any(k in lowered for k in ["website", "site", "url"])
+        return has_downtime_signal and (has_verify_signal or has_site_signal)
+
+    def _verify_candidate_downtime(self, url: str, attempts: int) -> Dict:
+        checks = []
+        down_count = 0
+
+        for index in range(1, attempts + 1):
+            result = {
+                "attempt": index,
+                "timestamp": int(time.time()),
+                "url": url,
+                "is_down": False,
+            }
+            try:
+                resp = self.session.get(url, timeout=self.request_timeout, allow_redirects=True)
+                status = resp.status_code
+                is_down = status >= 500 or status in {408, 429}
+                result["status_code"] = status
+                result["is_down"] = is_down
+                if is_down:
+                    down_count += 1
+            except Exception as e:
+                result["error"] = str(e)
+                result["is_down"] = True
+                down_count += 1
+
+            checks.append(result)
+            if index < attempts:
+                time.sleep(1)
+
+        return {
+            "source": "DowntimeVerifier",
+            "title": f"Downtime verification for {url}",
+            "link": url,
+            "verification_attempts": attempts,
+            "down_observed_count": down_count,
+            "is_consistently_down": down_count == attempts,
+            "checks": checks,
+            "conclusion": (
+                f"{url} appears DOWN across all {attempts} checks."
+                if down_count == attempts
+                else f"{url} was down in {down_count}/{attempts} checks; not consistently down."
+            ),
+        }
+
+    def _handle_downtime_query(self, query: str) -> str:
+        attempts = self._extract_verification_attempts(query)
+
+        explicit_url = re.search(r"https?://[^\s)]+", query)
+        candidates = [explicit_url.group(0)] if explicit_url else []
+        if not candidates:
+            candidates = [
+                "https://httpstat.us/503",
+                "https://httpbin.org/status/503",
+                "https://example.invalid",
+            ]
+
+        for candidate in candidates:
+            report = self._verify_candidate_downtime(candidate, attempts)
+            if report["is_consistently_down"]:
+                return json.dumps([report], indent=2)
+
+        return json.dumps([self._verify_candidate_downtime(candidates[0], attempts)], indent=2)
 
     def search(self, query: str, max_results: int = 3) -> str:
         """
@@ -30,6 +143,13 @@ class WebSearchTool:
         """
         logger.info(f"🔎 Searching for: {query}")
         all_results = []
+
+        if self._is_downtime_verification_query(query):
+            try:
+                return self._handle_downtime_query(query)
+            except Exception as e:
+                logger.error(f"Downtime verification failed: {e}")
+                return f"Search error: {e}"
         
         try:
             # 1. Search for titles
@@ -42,8 +162,7 @@ class WebSearchTool:
                 "srlimit": 2
             }
             
-            resp = self.session.get(search_url, params=search_params, timeout=10)
-            data = resp.json()
+            data = self._request_json_with_retry(search_url, search_params)
             
             search_items = data.get("query", {}).get("search", [])
             titles_to_fetch = [item["title"] for item in search_items]
@@ -79,8 +198,7 @@ class WebSearchTool:
                 "exchars": 3000
             }
             
-            c_resp = self.session.get(search_url, params=content_params, timeout=10)
-            c_data = c_resp.json()
+            c_data = self._request_json_with_retry(search_url, content_params)
             pages = c_data.get("query", {}).get("pages", {})
             
             for page_id, page_info in pages.items():

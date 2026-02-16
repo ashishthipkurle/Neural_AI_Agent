@@ -76,6 +76,7 @@ const menuAPI = {
     onNewFile: (cb: () => void): void => { ipcRenderer.on('menu:newFile', () => cb()) },
     onOpenFolder: (cb: (path: string) => void): void => { ipcRenderer.on('menu:openFolder', (_, p: string) => cb(p)) },
     onSave: (cb: () => void): void => { ipcRenderer.on('menu:save', () => cb()) },
+    onToggleCodeEditor: (cb: () => void): void => { ipcRenderer.on('menu:toggleCodeEditor', () => cb()) },
     onToggleTerminal: (cb: () => void): void => { ipcRenderer.on('menu:toggleTerminal', () => cb()) },
     onNewTerminal: (cb: (shell?: string) => void): void => { ipcRenderer.on('menu:newTerminal', (_, s?: string) => cb(s)) }
 }

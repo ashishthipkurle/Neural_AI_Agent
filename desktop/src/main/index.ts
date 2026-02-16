@@ -88,6 +88,7 @@ function createMenuTemplate(): Electron.MenuItemConstructorOptions[] {
         {
             label: 'View',
             submenu: [
+                { label: 'Toggle Code Editor', accelerator: 'CmdOrCtrl+Shift+E', click: () => mainWindow?.webContents.send('menu:toggleCodeEditor') },
                 { label: 'Toggle Terminal', accelerator: 'CmdOrCtrl+`', click: () => mainWindow?.webContents.send('menu:toggleTerminal') },
                 { label: 'Reload', accelerator: 'CmdOrCtrl+R', role: 'reload' },
                 { label: 'DevTools', accelerator: 'F12', role: 'toggleDevTools' }

@@ -7,9 +7,7 @@ export default function AboutSection() {
         <div>
           <h2>About Us</h2>
           <p>
-            We help healthcare providers equip their facilities with dependable devices
-            and transparent service. Our team works with trusted manufacturers and
-            provides assistance from selection to post-installation support.
+            A Medical Equipment helps healthcare providers equip their facilities with dependable devices and transparent service.
           </p>
         </div>
         <div className="highlight-box">

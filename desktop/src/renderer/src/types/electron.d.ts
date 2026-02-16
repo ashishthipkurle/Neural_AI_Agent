@@ -30,6 +30,7 @@ export interface ElectronAPI {
         onNewFile: (cb: () => void) => void
         onOpenFolder: (cb: (path: string) => void) => void
         onSave: (cb: () => void) => void
+        onToggleCodeEditor: (cb: () => void) => void
         onToggleTerminal: (cb: () => void) => void
         onNewTerminal: (cb: (shell?: string) => void) => void
     }

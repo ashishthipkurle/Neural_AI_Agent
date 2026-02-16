@@ -6,7 +6,7 @@ const products = [
   { name: 'Portable ECG Device', category: 'Cardiology', desc: 'Quick ECG checks with easy report export.' },
   { name: 'Nebulizer Kit', category: 'Respiratory', desc: 'Efficient aerosol therapy solution for all ages.' },
   { name: 'Suction Unit', category: 'Critical Care', desc: 'Compact and durable suction support system.' },
-  { name: 'Infusion Pump', category: 'Therapy', desc: 'Controlled medication and fluid delivery.' },
+  { name: 'Infusion Pump', category: 'Therapy', desc: 'Controlled medication and fluid delivery.' }
 ];
 
 export default function ProductsSection() {

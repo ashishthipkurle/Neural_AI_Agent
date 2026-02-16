@@ -7,6 +7,8 @@ import { CopilotModeSelector, CopilotMode } from './CopilotModeSelector';
 import { registerInlineCompletionProvider } from './InlineCompletionProvider';
 import * as monaco from 'monaco-editor';
 
+import './obsidian-pro.css';
+
 
 interface FileNode {
     name: string;
@@ -59,9 +61,26 @@ export default function CodeEditorView({ onClose, initialProjectPath = null }: C
     const [agentInput, setAgentInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [terminalOpen, setTerminalOpen] = useState(false);
+    const [terminalHeight, setTerminalHeight] = useState<number>(() => {
+        const saved = localStorage.getItem('obsidian_terminal_height');
+        const parsed = saved ? Number(saved) : NaN;
+        return Number.isFinite(parsed) ? parsed : 320;
+    });
     const [activeMenu, setActiveMenu] = useState<string | null>(null);
     const [showSidebar, setShowSidebar] = useState(true);
     const [showAgent, setShowAgent] = useState(true);
+
+    const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+        const saved = localStorage.getItem('obsidian_sidebar_width');
+        const parsed = saved ? Number(saved) : NaN;
+        return Number.isFinite(parsed) ? parsed : 260;
+    });
+
+    const [agentWidth, setAgentWidth] = useState<number>(() => {
+        const saved = localStorage.getItem('obsidian_agent_width');
+        const parsed = saved ? Number(saved) : NaN;
+        return Number.isFinite(parsed) ? parsed : 300;
+    });
     const rootHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -72,9 +91,36 @@ export default function CodeEditorView({ onClose, initialProjectPath = null }: C
     const [proposalId, setProposalId] = useState('');
     const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
+    const [selectedLlmModel, setSelectedLlmModel] = useState<string>(() => {
+        const saved = localStorage.getItem('codeAgent_llm_model');
+        return saved && saved.trim() ? saved : 'auto';
+    });
+
+    const terminalResizeRef = useRef<{ dragging: boolean; startY: number; startHeight: number } | null>(null);
+
+    const sidebarResizeRef = useRef<{ dragging: boolean; startX: number; startWidth: number } | null>(null);
+    const agentResizeRef = useRef<{ dragging: boolean; startX: number; startWidth: number } | null>(null);
+
+    useEffect(() => {
+        localStorage.setItem('obsidian_terminal_height', String(terminalHeight));
+    }, [terminalHeight]);
+
+    useEffect(() => {
+        localStorage.setItem('codeAgent_llm_model', selectedLlmModel);
+    }, [selectedLlmModel]);
+
+    useEffect(() => {
+        localStorage.setItem('obsidian_sidebar_width', String(sidebarWidth));
+    }, [sidebarWidth]);
+
+    useEffect(() => {
+        localStorage.setItem('obsidian_agent_width', String(agentWidth));
+    }, [agentWidth]);
+
     // Derived state
     const currentFile = openFiles.find(f => f.path === activeFile);
     const saveFunctionRef = useRef<() => void>(() => { });
+    const hasUserMessages = agentMessages.some(m => m.role === 'user');
 
     // Effect to register inline provider
     useEffect(() => {
@@ -397,7 +443,11 @@ export default function CodeEditorView({ onClose, initialProjectPath = null }: C
 
             window.electronAPI.menu.onSave(() => {
                 console.log('Save triggered from menu');
-                // TODO: Implement save from menu
+                saveFunctionRef.current();
+            });
+
+            window.electronAPI.menu.onToggleTerminal(() => {
+                setTerminalOpen(prev => !prev);
             });
         }
     }, [rootPath]);
@@ -747,7 +797,8 @@ export default function CodeEditorView({ onClose, initialProjectPath = null }: C
                         language: currentFile.language,
                         file_path: currentFile.path,
                         selection: selection || '',
-                        user_input: originalMessage
+                        user_input: originalMessage,
+                        ...(selectedLlmModel !== 'auto' ? { model_name: selectedLlmModel } : {})
                     })
                 });
 
@@ -816,6 +867,8 @@ INSTRUCTIONS:
 - If the user asks to "explain" code, explain it clearly without generating new code.
 - If the user asks to "generate", "create", "write", or "build" something, provide complete, runnable code in a code block.
 - Be concise and helpful. Match your response to the user's intent.`
+                    ,
+                    ...(selectedLlmModel !== 'auto' ? { model_name: selectedLlmModel } : {})
                 })
             });
 
@@ -929,295 +982,474 @@ INSTRUCTIONS:
         }
     };
 
+        const handleAgentSubmit = () => {
+            if (isLoading) return;
+            void sendToAgent();
+        };
 
 
-    const renderNode = (node: FileNode, depth = 0): React.ReactNode => (
-        <div key={node.path}>
-            <div
-                className={`flex items - center gap - 1.5 px - 2 py - 1 cursor - pointer hover: bg - cyan - 500 / 10 rounded text - sm ${activeFile === node.path ? 'bg-cyan-500/20' : ''} `}
-                style={{ paddingLeft: `${depth * 16 + 8} px` }}
-                onClick={() => node.type === 'folder' ? toggleFolder(node) : openFile(node)}
-            >
-                {node.type === 'folder' ? (
-                    <>
-                        {node.expanded ? <ChevronDown size={14} className="text-cyan-500/60" /> : <ChevronRight size={14} className="text-cyan-500/60" />}
-                        <Folder size={14} className="text-cyan-400" />
-                    </>
-                ) : (
-                    <>
-                        <span className="w-3.5" />
-                        <FileText size={14} className="text-cyan-500/50" />
-                    </>
+
+    const renderTree = (nodes: FileNode[], level = 0) => {
+        return nodes.map((node) => (
+            <div key={node.path} className="flex flex-col">
+                <div
+                    className={`flex items-center py-1.5 px-4 cursor-pointer transition-all duration-200 border-l-2 ${
+                        activeFile === node.path 
+                            ? 'text-gray-200 bg-blue-500/10 border-blue-500' 
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border-transparent'
+                    }`}
+                    style={{ paddingLeft: `${Math.max(1, level + 1) * 12}px` }}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        if (node.type === 'folder') toggleFolder(node);
+                        else openFile(node);
+                    }}
+                >
+                    {node.type === 'folder' && (
+                        <span className={`material-symbols-outlined text-[16px] mr-1.5 text-gray-500 transform transition-transform duration-200 ${node.expanded ? 'rotate-90' : ''}`}>chevron_right</span>
+                    )}
+                    {!node.type || node.type === 'file' ? (
+                         <span className={`material-symbols-outlined text-[16px] mr-2 ${getFileIconColor(node.name)}`}>{getFileIcon(node.name)}</span>
+                    ) : node.type === 'folder' ? (
+                         <span className={`material-symbols-outlined text-[16px] mr-2 ${node.expanded ? 'text-blue-400' : 'text-blue-400/80'}`}>{node.expanded ? 'folder_open' : 'folder'}</span>
+                    ) : null}
+                    
+                    <span className="text-[13px] tracking-tight">{node.name}</span>
+                </div>
+                {node.type === 'folder' && node.expanded && node.children && (
+                    <div className="flex flex-col">
+                        {renderTree(node.children, level + 1)}
+                    </div>
                 )}
-                <span className="truncate text-white/80">{node.name}</span>
             </div>
-            {node.type === 'folder' && node.expanded && node.children?.map(child => renderNode(child, depth + 1))}
-        </div>
-    );
+        ));
+    };
+
+    const getFileIcon = (filename: string) => {
+        const ext = filename.split('.').pop()?.toLowerCase();
+        if (ext === 'js') return 'javascript';
+        if (ext === 'css') return 'css';
+        if (ext === 'html') return 'html';
+        return 'description';
+    };
+
+    const getFileIconColor = (filename: string) => {
+        const ext = filename.split('.').pop()?.toLowerCase();
+        if (ext === 'js') return 'text-yellow-500/80';
+        if (ext === 'css') return 'text-blue-400/80';
+        if (ext === 'html') return 'text-orange-500/90';
+        return 'text-gray-600';
+    };
 
     return (
-        <div className="fixed inset-0 flex flex-col" style={{ zIndex: 99999, background: '#0a0f1a' }} onClick={() => setActiveMenu(null)}>
-            {/* Menu Bar */}
-            <div className="h-8 bg-[#1e1e1e] flex items-center px-2 text-sm shrink-0 border-b border-[#333]">
-                {/* Window Controls */}
-                <div className="flex items-center gap-1.5 mr-4">
-                    <div className="w-3 h-3 rounded-full bg-red-500 cursor-pointer hover:brightness-110" onClick={onClose} />
-                    <div className="w-3 h-3 rounded-full bg-yellow-500 hover:brightness-110" />
-                    <div className="w-3 h-3 rounded-full bg-green-500 hover:brightness-110" />
-                </div>
-
-                {/* Menu Items */}
-                {['File', 'Edit', 'View', 'Run', 'Terminal', 'Help'].map(menu => (
-                    <div key={menu} className="relative">
-                        <button
-                            className={`px-3 py-1 text-white/80 hover:bg-white/10 rounded text-xs ${activeMenu === menu ? 'bg-white/10' : ''}`}
-                            onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === menu ? null : menu); }}
+        <div className="obsidian-pro fixed inset-0 z-[99999] bg-[#050505] text-gray-400 overflow-hidden flex flex-col antialiased selection:bg-primary/30 selection:text-white dark">
+            <div className="h-9 flex items-center justify-between px-3 glass-header z-50 shrink-0 select-none">
+                <div className="flex items-center shrink-0">
+                    <div className="flex items-center space-x-2 mr-6 opacity-60 hover:opacity-100 transition-opacity">
+                        <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f56] cursor-pointer" onClick={onClose}></div>
+                        <div className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]"></div>
+                        <div className="w-2.5 h-2.5 rounded-full bg-[#27c93f]"></div>
+                    </div>
+                    <div className="hidden md:flex items-center space-x-5 text-[11px] tracking-wide font-light text-gray-500">
+                        <span
+                            className="hover:text-gray-200 cursor-pointer transition-colors duration-200"
+                            onClick={() => handleSelectFolder()}
+                            title="Open Folder"
                         >
-                            {menu}
-                        </button>
+                            File
+                        </span>
+                        <span
+                            className="hover:text-gray-200 cursor-pointer transition-colors duration-200"
+                            onClick={() => saveFunctionRef.current()}
+                            title="Save"
+                        >
+                            Edit
+                        </span>
+                        <span
+                            className="hover:text-gray-200 cursor-pointer transition-colors duration-200"
+                            onClick={() => setTerminalOpen(prev => !prev)}
+                            title="Toggle Terminal"
+                        >
+                            View
+                        </span>
+                        <span className="hover:text-gray-200 cursor-pointer transition-colors duration-200" title="(Not wired)">
+                            Go
+                        </span>
+                        <span
+                            className="hover:text-gray-200 cursor-pointer transition-colors duration-200"
+                            onClick={() => setTerminalOpen(true)}
+                            title="Open Terminal"
+                        >
+                            Run
+                        </span>
+                    </div>
+                </div>
+                <div className="flex-1 flex items-center justify-center pointer-events-none">
+                    <div className="flex items-center space-x-2 text-[10px] font-mono tracking-wider opacity-100">
+                        <span className="material-symbols-outlined text-[14px] text-gray-500">deployed_code</span>
+                        <span className="text-gray-400">obsidian_pro</span>
+                        <span className="text-gray-700">/</span>
+                        <span className="text-gray-500">src</span>
+                        <span className="text-gray-700">/</span>
+                        <span className="text-gray-200">{activeFile ? activeFile.split(/[\\/]/).pop() : 'main.rs'}</span>
+                    </div>
+                </div>
+                <div className="flex items-center space-x-4 text-gray-600 shrink-0">
+                    <span className="material-symbols-outlined text-[16px] cursor-pointer hover:text-gray-300 transition-colors" onClick={() => setShowSidebar(!showSidebar)}>tune</span>
+                    <div className="w-px h-3 bg-gray-800"></div>
+                    <span className="material-symbols-outlined text-[16px] cursor-pointer hover:text-gray-300 transition-colors" onClick={() => setShowAgent(!showAgent)}>notifications</span>
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-gray-700 to-gray-800 border border-gray-700 flex items-center justify-center">
+                        <span className="text-[9px] text-white font-medium">OP</span>
+                    </div>
+                </div>
+            </div>
+            <div className="flex flex-1 overflow-hidden relative">
+                {showSidebar && (
+                    <div className="flex flex-col glass shrink-0 relative" style={{ width: sidebarWidth }}>
+                        <div className="h-9 flex items-center justify-between px-4 pt-1 mb-2">
+                            <span className="text-[10px] font-medium tracking-[0.1em] text-gray-500 uppercase">Explorer</span>
+                            <span className="material-symbols-outlined text-[16px] text-gray-600 cursor-pointer hover:text-white transition-colors">more_horiz</span>
+                        </div>
+                        <div className="flex-1 overflow-y-auto px-0 text-[13px] font-light select-none">
+                            <div className="px-4 py-1.5 flex items-center text-gray-300 group cursor-pointer hover:text-white transition-colors mb-1">
+                                <span className="material-symbols-outlined text-[16px] mr-1.5 transform group-hover:rotate-90 transition-transform text-gray-500">chevron_right</span>
+                                <span className="tracking-tight font-medium uppercase">{rootPath ? rootPath.split(/[\\/]/).pop() : 'PROJECT'}</span>
+                            </div>
+                            <div className="flex flex-col">
+                                {fileTree.length > 0 ? (
+                                    <div className="flex flex-col ml-4 border-l border-gray-800/50 my-1">
+                                        {renderTree(fileTree)}
+                                    </div>
+                                ) : (
+                                    <div className="pl-4 py-1.5 flex items-center text-gray-500 hover:text-gray-300 cursor-pointer antigravity-hover border-l-2 border-transparent">
+                                        <span className="opacity-80">Loading...</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="h-10 border-t border-gray-800/50 flex items-center px-4 justify-between bg-black/20">
+                            <div className="flex items-center space-x-3 text-[10px] text-gray-500 font-mono">
+                                <span className="flex items-center hover:text-gray-300 cursor-pointer"><span className="material-symbols-outlined text-[12px] mr-1">code</span> master*</span>
+                                <span className="flex items-center hover:text-gray-300 cursor-pointer"><span className="material-symbols-outlined text-[12px] mr-1">sync</span> 0↓ 1↑</span>
+                            </div>
+                        </div>
 
-                        {/* Dropdown Menu */}
-                        {activeMenu === menu && (
-                            <div className="absolute top-full left-0 mt-1 bg-[#252526] border border-[#454545] rounded shadow-xl min-w-[220px] py-1 z-50" onClick={e => e.stopPropagation()}>
-                                {menu === 'File' && (
-                                    <>
-                                        <button onClick={() => { const name = prompt('File name:'); if (name) { createNewFile(name, '', getLanguage(name)); } setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>New File</span><span className="text-white/40">Ctrl+N</span>
-                                        </button>
-                                        <button onClick={() => { handleSelectFolder(); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>Open Folder...</span><span className="text-white/40">Ctrl+K Ctrl+O</span>
-                                        </button>
-                                        <div className="border-t border-[#454545] my-1" />
-                                        <button onClick={() => { const f = openFiles.find(f => f.path === activeFile); if (f) saveFileToBackend(f.path, f.content); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs" disabled={!activeFile}>
-                                            <span>Save</span><span className="text-white/40">Ctrl+S</span>
-                                        </button>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Save As...</span><span className="text-white/40">Ctrl+Shift+S</span>
-                                        </button>
-                                        <button onClick={() => { openFiles.forEach(f => saveFileToBackend(f.path, f.content)); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>Save All</span><span className="text-white/40">Ctrl+K S</span>
-                                        </button>
-                                        <div className="border-t border-[#454545] my-1" />
-                                        <button onClick={() => { if (activeFile) closeFile(activeFile); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>Close Editor</span><span className="text-white/40">Ctrl+W</span>
-                                        </button>
-                                        <button onClick={() => { setOpenFiles([]); setActiveFile(null); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 text-xs">
-                                            Close All Editors
-                                        </button>
-                                        <div className="border-t border-[#454545] my-1" />
-                                        <button onClick={onClose} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>Exit</span><span className="text-white/40">Alt+F4</span>
-                                        </button>
-                                    </>
-                                )}
-                                {menu === 'Edit' && (
-                                    <>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Undo</span><span className="text-white/40">Ctrl+Z</span>
-                                        </button>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Redo</span><span className="text-white/40">Ctrl+Y</span>
-                                        </button>
-                                        <div className="border-t border-[#454545] my-1" />
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Cut</span><span className="text-white/40">Ctrl+X</span>
-                                        </button>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Copy</span><span className="text-white/40">Ctrl+C</span>
-                                        </button>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Paste</span><span className="text-white/40">Ctrl+V</span>
-                                        </button>
-                                        <div className="border-t border-[#454545] my-1" />
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Find</span><span className="text-white/40">Ctrl+F</span>
-                                        </button>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Replace</span><span className="text-white/40">Ctrl+H</span>
-                                        </button>
-                                    </>
-                                )}
-                                {menu === 'View' && (
-                                    <>
-                                        <button onClick={() => { setShowSidebar(!showSidebar); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>{showSidebar ? '✓ ' : ''}Explorer</span><span className="text-white/40">Ctrl+B</span>
-                                        </button>
-                                        <button onClick={() => { setShowAgent(!showAgent); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>{showAgent ? '✓ ' : ''}AI Agent Panel</span>
-                                        </button>
-                                        <button onClick={() => { setTerminalOpen(!terminalOpen); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>{terminalOpen ? '✓ ' : ''}Terminal</span><span className="text-white/40">Ctrl+`</span>
-                                        </button>
-                                    </>
-                                )}
-                                {menu === 'Run' && (
-                                    <>
-                                        <button onClick={() => { setTerminalOpen(true); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>Run Current File</span><span className="text-white/40">F5</span>
-                                        </button>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/40 cursor-not-allowed flex justify-between text-xs">
-                                            <span>Run Without Debugging</span><span className="text-white/40">Ctrl+F5</span>
-                                        </button>
-                                    </>
-                                )}
-                                {menu === 'Terminal' && (
-                                    <>
-                                        <button onClick={() => { setTerminalOpen(true); setActiveMenu(null); }} className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 flex justify-between text-xs">
-                                            <span>New Terminal</span><span className="text-white/40">Ctrl+Shift+`</span>
-                                        </button>
-                                    </>
-                                )}
-                                {menu === 'Help' && (
-                                    <>
-                                        <button className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 text-xs">
-                                            Keyboard Shortcuts
-                                        </button>
-                                        <div className="border-t border-[#454545] my-1" />
-                                        <button className="w-full px-4 py-1.5 text-left text-white/80 hover:bg-cyan-500/30 text-xs">
-                                            About Neural Code Editor
-                                        </button>
-                                    </>
-                                )}
+                        {/* Sidebar resize handle */}
+                        <div
+                            className="absolute top-0 right-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-cyan-500/10 transition-colors select-none"
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                sidebarResizeRef.current = { dragging: true, startX: e.clientX, startWidth: sidebarWidth };
+
+                                const onMove = (ev: MouseEvent) => {
+                                    const ref = sidebarResizeRef.current;
+                                    if (!ref?.dragging) return;
+                                    const delta = ev.clientX - ref.startX;
+                                    const next = ref.startWidth + delta;
+                                    const min = 180;
+                                    const max = Math.min(600, Math.floor(window.innerWidth * 0.6));
+                                    setSidebarWidth(Math.max(min, Math.min(max, next)));
+                                };
+
+                                const onUp = () => {
+                                    sidebarResizeRef.current = null;
+                                    window.removeEventListener('mousemove', onMove);
+                                    window.removeEventListener('mouseup', onUp);
+                                };
+
+                                window.addEventListener('mousemove', onMove);
+                                window.addEventListener('mouseup', onUp);
+                            }}
+                            title="Drag to resize Explorer"
+                        />
+                    </div>
+                )}
+                <div className="flex-1 flex flex-col min-w-0 bg-[#050505] relative">
+                    <div className="flex h-9 bg-[#050505] border-b border-gray-800/50 overflow-x-auto shrink-0">
+                        {openFiles.length > 0 ? openFiles.map(file => (
+                            <div key={file.path} onClick={() => setActiveFile(file.path)} className={`flex items-center px-4 pr-2 min-w-fit cursor-pointer group relative ${activeFile === file.path ? 'bg-[#0a0a0c] border-t-2 border-t-primary' : 'bg-transparent opacity-50 hover:opacity-100 border-r border-gray-800/50'}`}>
+                                {activeFile === file.path && <div className="absolute inset-x-0 top-0 h-full bg-gradient-to-b from-white/5 to-transparent pointer-events-none"></div>}
+                                <span className={`text-[12px] mr-2 font-mono flex items-center ${activeFile === file.path ? 'text-gray-200' : 'text-gray-400'}`}>
+                                    <span className={`material-symbols-outlined text-[14px] mr-2 ${getFileIconColor(file.name)}`}>{getFileIcon(file.name)}</span>
+                                    {file.name}
+                                </span>
+                                <span onClick={(e) => { e.stopPropagation(); closeFile(file.path); }} className="material-symbols-outlined text-[14px] text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-all rounded p-0.5 hover:bg-white/10">close</span>
+                            </div>
+                        )) : (
+                            <div className="flex items-center px-4 pr-2 bg-transparent min-w-fit cursor-pointer group opacity-50 border-r border-gray-800/50">
+                                <span className="text-[12px] text-gray-400 mr-2 font-mono flex items-center">No Active Editor</span>
                             </div>
                         )}
                     </div>
-                ))}
-
-                <div className="flex-1" />
-                <span className="text-white/40 text-xs">{rootPath || 'Neural Code Editor'}</span>
-            </div>
-
-
-            <div className="flex-1 flex overflow-hidden">
-                {/* File Explorer */}
-                {showSidebar && (
-                    <div className="w-60 bg-[#0c1624] border-r border-cyan-500/10 flex flex-col shrink-0">
-                        <div className="px-3 py-2 text-xs text-cyan-500/60 font-medium uppercase tracking-wider border-b border-cyan-500/10 flex items-center justify-between">
-                            <span>Explorer</span>
-                            <button
-                                onClick={handleSelectFolder}
-                                className="hover:bg-cyan-500/20 p-1 rounded"
-                                title="Open Folder"
+                    <div className="flex-1 flex flex-col items-center justify-center relative bg-[#050505] min-h-0 overflow-hidden">
+                         {activeFile ? (
+                            <Editor
+                                height="100%"
+                                path={activeFile}
+                                defaultLanguage={getLanguage(activeFile)}
+                                defaultValue={openFiles.find(f => f.path === activeFile)?.content || ''}
+                                value={openFiles.find(f => f.path === activeFile)?.content || ''}
+                                theme="vs-dark"
+                                onMount={handleEditorDidMount}
+                                onChange={(value) => {
+                                    if (value !== undefined) handleEditorChange(value);
+                                }}
+                                options={{
+                                    minimap: { enabled: false },
+                                    fontSize: 14,
+                                    fontFamily: "'JetBrains Mono', monospace",
+                                    lineHeight: 24,
+                                    padding: { top: 16 },
+                                    scrollBeyondLastLine: false,
+                                    smoothScrolling: true,
+                                    cursorBlinking: "smooth",
+                                    cursorSmoothCaretAnimation: "on",
+                                    renderLineHighlight: "all",
+                                    bracketPairColorization: { enabled: true },
+                                    guides: {
+                                        indentation: true,
+                                        bracketPairs: true
+                                    }
+                                }}
+                                className="obsidian-pro-editor"
+                            />
+                         ) : (
+                            <div className="flex-1 flex flex-col items-center justify-center bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI13LhADtNNGYrWCYdaGcRiGWmwjXACLGuiX=')] bg-cover bg-center relative w-full h-full">
+                                <div className="absolute inset-0 bg-background-dark/95 backdrop-blur-[2px]"></div>
+                                <div className="relative z-10 text-center animate-[fadeIn_0.8s_ease-out_forwards]">
+                                    <div className="w-20 h-20 mx-auto mb-8 rounded-full bg-gradient-to-b from-gray-800 to-black shadow-[0_0_40px_-10px_rgba(0,0,0,0.8)] flex items-center justify-center border border-white/5 ring-1 ring-white/5">
+                                        <span className="material-symbols-outlined text-[40px] text-gray-600">code_off</span>
+                                    </div>
+                                    <h2 className="text-lg font-light tracking-wide text-gray-300 mb-3">No Active Editor</h2>
+                                    <div className="inline-flex items-center px-3 py-1 rounded-full border border-gray-800 bg-gray-900/50 text-xs text-gray-500 font-mono mb-10">
+                                        <span className="mr-2">⌘ P</span> to search files
+                                    </div>
+                                    <div className="flex gap-6 justify-center">
+                                        <div className="flex flex-col items-center group cursor-pointer" onClick={() => createNewFile('untitled', '', 'plaintext')}>
+                                            <div className="w-10 h-10 rounded-full bg-gray-900 border border-gray-800 flex items-center justify-center group-hover:border-primary/50 group-hover:text-primary transition-all duration-300 mb-3 shadow-lg">
+                                                <span className="material-symbols-outlined text-[18px] text-gray-500 group-hover:text-primary transition-colors">add</span>
+                                            </div>
+                                            <span className="text-[10px] uppercase tracking-widest text-gray-600 group-hover:text-gray-400 transition-colors">New</span>
+                                        </div>
+                                        <div className="flex flex-col items-center group cursor-pointer" onClick={() => handleSelectFolder()}>
+                                            <div className="w-10 h-10 rounded-full bg-gray-900 border border-gray-800 flex items-center justify-center group-hover:border-primary/50 group-hover:text-primary transition-all duration-300 mb-3 shadow-lg">
+                                                <span className="material-symbols-outlined text-[18px] text-gray-500 group-hover:text-primary transition-colors">folder_open</span>
+                                            </div>
+                                            <span className="text-[10px] uppercase tracking-widest text-gray-600 group-hover:text-gray-400 transition-colors">Open</span>
+                                        </div>
+                                        <div className="flex flex-col items-center group cursor-pointer" onClick={() => setTerminalOpen(true)}>
+                                            <div className="w-10 h-10 rounded-full bg-gray-900 border border-gray-800 flex items-center justify-center group-hover:border-primary/50 group-hover:text-primary transition-all duration-300 mb-3 shadow-lg">
+                                                <span className="material-symbols-outlined text-[18px] text-gray-500 group-hover:text-primary transition-colors">terminal</span>
+                                            </div>
+                                            <span className="text-[10px] uppercase tracking-widest text-gray-600 group-hover:text-gray-400 transition-colors">Run</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    {/* Terminal: always render a collapsed bar so users can re-open with an UP button */}
+                    {terminalOpen ? (
+                        <div
+                            className="border-t border-gray-800 bg-[#08080a] flex flex-col shrink-0"
+                            style={{ height: terminalHeight }}
+                        >
+                            {/* Resize handle */}
+                            <div
+                                className="h-2.5 cursor-row-resize bg-transparent hover:bg-cyan-500/20 active:bg-cyan-500/30 transition-colors select-none flex items-center justify-center group"
+                                onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    terminalResizeRef.current = { dragging: true, startY: e.clientY, startHeight: terminalHeight };
+                                    const onMove = (ev: MouseEvent) => {
+                                        const ref = terminalResizeRef.current;
+                                        if (!ref?.dragging) return;
+                                        const delta = ref.startY - ev.clientY; // dragging up increases height
+                                        const next = ref.startHeight + delta;
+                                        const min = 180;
+                                        const max = Math.floor(window.innerHeight * 0.7);
+                                        setTerminalHeight(Math.max(min, Math.min(max, next)));
+                                    };
+                                    const onUp = () => {
+                                        terminalResizeRef.current = null;
+                                        window.removeEventListener('mousemove', onMove);
+                                        window.removeEventListener('mouseup', onUp);
+                                    };
+                                    window.addEventListener('mousemove', onMove);
+                                    window.addEventListener('mouseup', onUp);
+                                }}
+                                title="Drag to resize terminal"
                             >
-                                <FolderOpen size={14} className="text-cyan-500/60" />
+                                <div className="w-10 h-1 rounded-full bg-gray-600/40 group-hover:bg-cyan-500/50 transition-colors" />
+                            </div>
+                            <div className="flex-1 min-h-0 overflow-hidden">
+                                <TerminalPanel
+                                    isOpen={true}
+                                    onToggle={() => setTerminalOpen(false)}
+                                    cwd={rootPath || undefined}
+                                    hideHeader={false}
+                                />
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="h-8 border-t border-gray-800 bg-[#08080a] flex items-center justify-between px-4 shrink-0">
+                            <div className="flex items-center gap-2 text-[11px] text-gray-500 select-none">
+                                <span className="material-symbols-outlined text-[14px] text-gray-600">terminal</span>
+                                <span>Terminal</span>
+                            </div>
+                            <button
+                                className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-white transition-colors"
+                                onClick={() => setTerminalOpen(true)}
+                                title="Expand Terminal"
+                            >
+                                <span className="material-symbols-outlined text-[16px]">keyboard_arrow_up</span>
                             </button>
                         </div>
-                        <div className="flex-1 overflow-y-auto">
-                            {rootPath ? (
-                                <div>
-                                    {/* Folder Name Header */}
-                                    <div
-                                        className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-cyan-500/10 text-xs font-semibold text-white/90 border-b border-cyan-500/5"
-                                    >
-                                        <ChevronDown size={14} className="text-cyan-500/60" />
-                                        <Folder size={14} className="text-cyan-400" />
-                                        <span className="truncate uppercase tracking-wide">
-                                            {rootPath.split('\\').pop() || rootPath.split('/').pop() || 'Folder'}
-                                        </span>
+                    )}
+                </div>
+                {showAgent && (
+                    <div className="border-l border-gray-800/50 glass-lighter bg-[#070709] flex flex-col shrink-0 z-10 relative" style={{ width: agentWidth }}>
+                        {/* Agent resize handle */}
+                        <div
+                            className="absolute top-0 left-0 h-full w-2 cursor-col-resize bg-transparent hover:bg-cyan-500/10 transition-colors select-none"
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                agentResizeRef.current = { dragging: true, startX: e.clientX, startWidth: agentWidth };
+
+                                const onMove = (ev: MouseEvent) => {
+                                    const ref = agentResizeRef.current;
+                                    if (!ref?.dragging) return;
+                                    const delta = ref.startX - ev.clientX; // drag left increases width
+                                    const next = ref.startWidth + delta;
+                                    const min = 260;
+                                    const max = Math.min(700, Math.floor(window.innerWidth * 0.65));
+                                    setAgentWidth(Math.max(min, Math.min(max, next)));
+                                };
+
+                                const onUp = () => {
+                                    agentResizeRef.current = null;
+                                    window.removeEventListener('mousemove', onMove);
+                                    window.removeEventListener('mouseup', onUp);
+                                };
+
+                                window.addEventListener('mousemove', onMove);
+                                window.addEventListener('mouseup', onUp);
+                            }}
+                            title="Drag to resize Code Agent"
+                        />
+                        <div className="h-10 flex items-center justify-between px-4 border-b border-gray-800/50 bg-[#0a0a0c]/50">
+                            <div className="flex items-center gap-2">
+                                <span className="material-symbols-outlined text-primary text-[16px] animate-pulse">auto_awesome</span>
+                                <span className="font-medium text-[12px] text-gray-300">Code Agent</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20">
+                                <span className="w-1 h-1 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.8)]"></span>
+                                <span className="text-[9px] uppercase text-green-400 tracking-wider font-medium">Ready</span>
+                            </div>
+                        </div>
+
+                        {/* LLM selector */}
+                        <div className="px-4 py-2 border-b border-gray-800/40 bg-black/10">
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">LLM</span>
+                                <select
+                                    value={selectedLlmModel}
+                                    onChange={(e) => setSelectedLlmModel(e.target.value)}
+                                    className="text-[11px] bg-[#121215] text-gray-200 border border-gray-800/80 rounded px-2 py-1 outline-none focus:border-white/20"
+                                    title="Select which model to use for Code Agent replies. Auto chooses based on task complexity."
+                                >
+                                    <option value="auto">Auto (smart)</option>
+                                    <option value="gpt-oss:120b-cloud">GPT-OSS 120B (cloud)</option>
+                                    <option value="kimi-k2.5:cloud">Kimi K2.5 (cloud)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 p-4 overflow-y-auto space-y-6" ref={messagesEndRef}>
+                            <div className="flex gap-3">
+                                <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20">
+                                    <span className="material-symbols-outlined text-primary text-[14px]">smart_toy</span>
+                                </div>
+                                <div className="space-y-1 w-full">
+                                    <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Assistant</div>
+                                    <div className="text-[12px] text-gray-300 leading-relaxed bg-[#121215] p-3 rounded-lg border border-gray-800/80 shadow-sm">
+                                        <p class="mb-2">I'm ready to help with your code.</p>
+                                        <ul class="list-none space-y-1.5 text-gray-500">
+                                        <li class="flex items-center gap-2"><span class="w-1 h-1 bg-gray-600 rounded-full"></span> Generate components</li>
+                                        <li class="flex items-center gap-2"><span class="w-1 h-1 bg-gray-600 rounded-full"></span> Refactor logic</li>
+                                        <li class="flex items-center gap-2"><span class="w-1 h-1 bg-gray-600 rounded-full"></span> Debug issues</li>
+                                        </ul>
                                     </div>
-                                    {/* Disconnected Warning */}
-                                    {!isFolderConnected() && (
-                                        <div className="px-2 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
-                                            <p className="text-yellow-400/80 text-xs mb-1">⚠️ Folder disconnected</p>
-                                            <button
-                                                onClick={handleSelectFolder}
-                                                className="text-xs text-cyan-400 hover:underline"
-                                            >
-                                                Reconnect to save files
-                                            </button>
+                                </div>
+                            </div>
+                            
+                            {agentMessages.slice(1).map((msg, i) => (
+                                <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border ${msg.role === 'agent' ? 'bg-primary/10 border-primary/20' : 'bg-gray-700/50 border-gray-600'}`}>
+                                        <span className="material-symbols-outlined text-primary text-[14px]">{msg.role === 'agent' ? 'smart_toy' : 'person'}</span>
+                                    </div>
+                                    <div className="space-y-1 w-full max-w-[85%]">
+                                        <div className={`text-[10px] font-medium uppercase tracking-wider mb-1 ${msg.role === 'user' ? 'text-right' : ''} text-gray-500`}>{msg.role === 'agent' ? 'Assistant' : 'You'}</div>
+                                        <div className={`text-[12px] text-gray-300 leading-relaxed p-3 rounded-lg border shadow-sm ${msg.role === 'agent' ? 'bg-[#121215] border-gray-800/80' : 'bg-[#1e1e24] border-gray-700'}`}>
+                                            <p className="whitespace-pre-wrap">{msg.text}</p>
                                         </div>
-                                    )}
-                                    {/* File Tree */}
-                                    <div className="py-1">
-                                        {fileTree.map(node => renderNode(node, 1))}
                                     </div>
                                 </div>
-                            ) : fileTree.length > 0 ? (
-                                <div className="py-1">
-                                    {fileTree.map(node => renderNode(node))}
+                            ))}
+                            
+                            {isLoading && (
+                                <div className="flex gap-3">
+                                    <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20">
+                                        <span className="material-symbols-outlined text-primary text-[14px] animate-spin">sync</span>
+                                    </div>
                                 </div>
-                            ) : (
-                                <div className="p-4 text-center">
-                                    <FolderOpen size={32} className="mx-auto mb-3 text-cyan-500/30" />
-                                    <p className="text-cyan-500/40 text-sm">No folder open</p>
-                                    <button onClick={handleSelectFolder} className="text-cyan-400 text-sm hover:underline mt-2">Open a folder</button>
+                            )}
+
+                            {/* Active Context removed per user request */}
+                            {!hasUserMessages && (
+                                <div className="space-y-2">
+                                    <div className="text-[10px] uppercase text-gray-600 tracking-wider font-medium ml-1">Suggestions</div>
+                                    <button className="w-full text-left px-3 py-2.5 rounded bg-[#121215] hover:bg-[#18181b] border border-gray-800 hover:border-gray-700 text-[11px] text-gray-400 transition-all flex items-center gap-2 group">
+                                        <span className="material-symbols-outlined text-[14px] text-gray-600 group-hover:text-primary transition-colors">play_arrow</span>
+                                        Create calculator component
+                                    </button>
+                                    <button className="w-full text-left px-3 py-2.5 rounded bg-[#121215] hover:bg-[#18181b] border border-gray-800 hover:border-gray-700 text-[11px] text-gray-400 transition-all flex items-center gap-2 group">
+                                        <span className="material-symbols-outlined text-[14px] text-gray-600 group-hover:text-primary transition-colors">bug_report</span>
+                                        Scan for vulnerabilities
+                                    </button>
                                 </div>
                             )}
                         </div>
-                    </div>
-                )}
-
-                {/* Editor + Terminal */}
-                <div className="flex-1 flex flex-col min-w-0 bg-[#0d1520]">
-                    {/* File Tabs */}
-                    <div className="h-9 bg-[#0c1624] border-b border-cyan-500/10 flex items-center overflow-x-auto shrink-0">
-                        {openFiles.length === 0 && <div className="px-4 text-cyan-500/40 text-sm">No files open</div>}
-                        {openFiles.map(file => (
-                            <div key={file.path} className={`flex items-center gap-2 px-3 py-1.5 border-r border-cyan-500/10 cursor-pointer shrink-0 ${activeFile === file.path ? 'bg-[#0d1520] text-white' : 'text-white/50 hover:bg-white/5'}`} onClick={() => setActiveFile(file.path)}>
-                                <FileText size={12} className="text-cyan-500/50" />
-                                <span className="text-sm whitespace-nowrap">{file.modified && '● '}{file.name}</span>
-                                <X size={14} className="text-white/30 hover:text-red-400" onClick={(e) => { e.stopPropagation(); closeFile(file.path); }} />
-                            </div>
-                        ))}
-                    </div>
-
-                    <div className={`flex-1 min-h-0 ${terminalOpen ? 'h-[calc(100%-200px)]' : 'h-full'}`}>
-                        {currentFile ? (
-                            <Editor
-                                height="100%"
-                                language={currentFile.language}
-                                value={currentFile.content}
-                                theme="vs-dark"
-                                onMount={handleEditorDidMount}
-                                onChange={(v) => updateFileContent(currentFile.path, v || '')}
-                                options={{ fontSize: 14, fontFamily: "'JetBrains Mono', Consolas, monospace", minimap: { enabled: true }, scrollBeyondLastLine: false, wordWrap: 'on', padding: { top: 12 } }}
-                            />
-                        ) : (
-                            <div className="h-full flex items-center justify-center text-cyan-500/40">
-                                <div className="text-center">
-                                    <FileText size={56} className="mx-auto mb-4 opacity-40" />
-                                    <p>Select a file to edit</p>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Terminal Panel */}
-                    <TerminalPanel
-                        isOpen={terminalOpen}
-                        onToggle={() => setTerminalOpen(!terminalOpen)}
-                        cwd={rootPath || undefined}
-                    />
-                </div>
-
-                {/* AI Agent */}
-                {showAgent && (
-                    <div className="w-80 bg-[#0c1624] border-l border-cyan-500/10 flex flex-col shrink-0">
-                        <div className="px-3 py-2 border-b border-cyan-500/10 flex items-center gap-2">
-                            <Sparkles size={16} className="text-cyan-400" />
-                            <span className="text-sm font-medium text-white">Code Agent</span>
-                            <Wand2 size={14} className="ml-auto text-cyan-500/50" />
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                            {agentMessages.map((msg, i) => (
-                                <div key={i} className={`p - 3 rounded - lg text - sm ${msg.role === 'user' ? 'bg-cyan-500/20 ml-6' : 'bg-[#0a0f1a] mr-2'} `}>
-                                    <pre className="whitespace-pre-wrap font-sans text-sm text-white/85">{msg.text}</pre>
-                                </div>
-                            ))}
-                            {isLoading && <div className="p-3 rounded-lg bg-[#0a0f1a] flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" /><span className="text-cyan-400 text-sm">Generating...</span></div>}
-                            <div ref={messagesEndRef} />
-                        </div>
-                        <div className="p-3 border-t border-cyan-500/10">
-                            <div className="flex gap-2">
-                                <input type="text" value={agentInput} onChange={(e) => setAgentInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendToAgent()} placeholder="Ask or generate code..." className="flex-1 bg-[#0a0f1a] border border-cyan-500/30 rounded-lg px-3 py-2 text-sm text-white placeholder-cyan-500/40 focus:outline-none focus:border-cyan-500" />
-                                <button onClick={sendToAgent} disabled={isLoading} className="p-2.5 bg-cyan-500 hover:bg-cyan-400 rounded-lg disabled:opacity-40">
-                                    <Send size={16} className="text-[#0a0f1a]" />
+                        <div className="p-3 bg-[#070709] border-t border-gray-800/50">
+                            <div className="relative group">
+                                <textarea className="w-full bg-[#121215] text-gray-200 text-[12px] p-3 pr-10 rounded-lg border border-gray-800/80 focus:border-primary/50 focus:ring-1 focus:ring-primary/20 focus:outline-none resize-none placeholder-gray-600 transition-all shadow-inner" placeholder="Describe what you want to build..." rows={2} value={agentInput} onChange={(e) => setAgentInput(e.target.value)} onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                        e.preventDefault();
+                                        handleAgentSubmit();
+                                    }
+                                }}></textarea>
+                                <button className="absolute bottom-2.5 right-2.5 p-1 text-gray-500 hover:text-white transition-colors" onClick={handleAgentSubmit}>
+                                    <span className="material-symbols-outlined text-[16px] transform -rotate-45 translate-x-0.5 -translate-y-0.5">send</span>
                                 </button>
+                            </div>
+                            <div className="flex justify-between items-center mt-2 px-1 opacity-50">
+                                <span className="text-[9px] text-gray-500">Enter to send • Shift+Enter for newline</span>
                             </div>
                         </div>
                     </div>
                 )}
             </div>
-        </div >
+            <div className="h-6 bg-[#050505] border-t border-white/5 text-slate-200 text-[10px] flex items-center justify-between px-3 select-none z-50">
+                <div className="flex items-center space-x-3">
+                    <span className="font-bold flex items-center gap-1.5 hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer transition-colors"><span className="material-symbols-outlined text-[12px]">cloud_done</span> REMOTE</span>
+                    <span className="opacity-80 hover:opacity-100 cursor-pointer hover:bg-white/10 px-1.5 py-0.5 rounded transition-colors">Live Share</span>
+                </div>
+                <div className="flex items-center space-x-2 opacity-90">
+                    <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer transition-colors">Ln 12, Col 45</span>
+                    <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer transition-colors">UTF-8</span>
+                    <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer transition-colors">JavaScript</span>
+                    <span className="hover:bg-white/10 px-1.5 py-0.5 rounded cursor-pointer transition-colors flex items-center gap-1"><span className="material-symbols-outlined text-[12px]">notifications_none</span></span>
+                </div>
+            </div>
+        </div>
     );
 }

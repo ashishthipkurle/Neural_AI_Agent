@@ -43,6 +43,11 @@ class CommandRouter:
     def can_handle(self, user_input: str) -> bool:
         """Check if the input matches any known fast patterns."""
         u = user_input.lower().strip()
+
+        # EXCEPTION: Ordered multi-step browser workflows should go through mission/planning.
+        # Example: "Go to X, search for Y, open first 3 results, summarize them"
+        if all(k in u for k in ["go to", "search", "open first"]) and "summar" in u:
+            return False
         
         # EXCEPTION: If input looks like "search X on Y" (browser specific), let IntentParser handle it.
         # This prevents this simple regex router from stealing complex browser-launch intents.

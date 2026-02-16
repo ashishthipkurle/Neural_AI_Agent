@@ -17,6 +17,7 @@ if os.name == 'nt':
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
+import re
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,6 +93,95 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
+def _get_llm_config() -> Dict[str, Any]:
+    if agent and getattr(agent, "config", None):
+        return agent.config.get("llm", {}) or {}
+    return {}
+
+
+def _pick_from_available_models(available_models: List[str], predicate) -> Optional[str]:
+    for model in available_models or []:
+        try:
+            if predicate(model):
+                return model
+        except Exception:
+            continue
+    return None
+
+
+def _auto_route_model(
+    *,
+    llm_config: Dict[str, Any],
+    text: str,
+    kind: str,
+    fallback_model: str,
+) -> str:
+    """Choose a model when UI sends model_name='auto' (i.e., omits model_name).
+
+    Heuristic router: selects a cheaper/faster model for simple tasks, and a stronger model
+    for complex/long/coding-heavy tasks.
+    """
+
+    available_models = llm_config.get("available_models") or []
+
+    configured_simple = (llm_config.get("auto_routing") or {}).get("simple_model")
+    configured_complex = (llm_config.get("auto_routing") or {}).get("complex_model")
+
+    simple_model = configured_simple or llm_config.get("model_name") or fallback_model
+    complex_model = configured_complex
+
+    # If not explicitly configured, try to infer from available_models.
+    if not complex_model:
+        complex_model = _pick_from_available_models(
+            available_models,
+            lambda m: "gpt-oss:120b" in m or m.strip() == "gpt-oss:120b-cloud",
+        )
+    if not configured_simple and available_models:
+        # Prefer Kimi for "simple" if present.
+        kimi = _pick_from_available_models(available_models, lambda m: "kimi" in m.lower())
+        if kimi:
+            simple_model = kimi
+
+    # If we can't find a distinct complex model, fall back to the configured/simple one.
+    if not complex_model:
+        return simple_model
+
+    text = (text or "").strip()
+    length = len(text)
+    newline_count = text.count("\n")
+
+    score = 0
+
+    if kind == "refactor":
+        score += 6
+    elif kind == "suggest":
+        score -= 3  # bias toward fast/cheap for inline suggestions
+
+    if "```" in text:
+        score += 2
+    if newline_count >= 30:
+        score += 2
+    if length >= 1200:
+        score += 3
+    if length >= 4000:
+        score += 6
+
+    # Error logs / stack traces
+    if re.search(r"\b(traceback|exception|stack trace|error:|failed|failing tests?)\b", text, re.I):
+        score += 2
+
+    # Requests that typically benefit from a stronger model
+    if re.search(r"\b(refactor|architecture|design|implement|optimi[sz]e|multi[- ]file|migration)\b", text, re.I):
+        score += 2
+
+    # Threshold can be configured; default keeps most short prompts on simple model.
+    threshold = int((llm_config.get("auto_routing") or {}).get("complexity_threshold", 5))
+
+    chosen = complex_model if score >= threshold else simple_model
+    logger.info(f"🤖 Auto model routing: kind={kind} score={score} threshold={threshold} -> {chosen}")
+    return chosen
+
 async def broadcast_event(event_type: str, role: str, text: str, task_id: str = None, partial: bool = False):
     """Helper to broadcast event according to mandatory model."""
     event = {
@@ -107,6 +197,7 @@ async def broadcast_event(event_type: str, role: str, text: str, task_id: str = 
 class ChatRequest(BaseModel):
     message: str
     image: Optional[str] = None
+    model_name: Optional[str] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -266,11 +357,19 @@ async def get_status():
             state="not_initialized"
         )
     
+    state_value = "unknown"
+    if agent._state_machine:
+        if hasattr(agent._state_machine, "current_state") and getattr(agent._state_machine.current_state, "name", None):
+            state_value = agent._state_machine.current_state.name
+        elif hasattr(agent._state_machine, "state"):
+            state_obj = agent._state_machine.state
+            state_value = getattr(state_obj, "name", str(state_obj))
+
     return StatusResponse(
         status="online",
         initialized=agent._initialized,
         locked=agent._lock_controller.is_locked if agent._lock_controller else False,
-        state=agent._state_machine.current_state.name if agent._state_machine else "unknown"
+        state=state_value
     )
 
 
@@ -431,8 +530,24 @@ async def generate_code(request: ChatRequest):
     logger.info(f"💻 Code generation request: {request.message[:100]}...")
     
     try:
-        # Use unified model from config for all tasks including coding
-        coding_model = agent.config.get('llm', {}).get('model_name', 'gpt-oss:120b-cloud')
+        llm_config = _get_llm_config()
+
+        # Model selection priority:
+        # 1) request.model_name (explicit UI selection)
+        # 2) if image is present -> vision_model
+        # 3) AUTO (no model_name) -> smart routing by complexity
+        fallback_model = "gpt-oss:120b-cloud"
+        if request.model_name and request.model_name.strip():
+            coding_model = request.model_name.strip()
+        elif request.image:
+            coding_model = llm_config.get("vision_model") or llm_config.get("model_name") or fallback_model
+        else:
+            coding_model = _auto_route_model(
+                llm_config=llm_config,
+                text=request.message,
+                kind="code",
+                fallback_model=llm_config.get("model_name") or fallback_model,
+            )
         logger.info(f"🤖 Using model: {coding_model}")
         
         # Direct call to Ollama with coding model
@@ -481,7 +596,7 @@ async def generate_code(request: ChatRequest):
         logger.error(f"❌ Code generation error: {e}")
         logger.error(traceback.format_exc())
         return ChatResponse(
-            response=f"Code generation failed: {str(e) or 'Unknown error'}. Make sure Ollama is running and the model is installed (ollama pull gpt-oss:120b-cloud).",
+            response=f"Code generation failed: {str(e) or 'Unknown error'}. Make sure Ollama is running and the model is installed (e.g. ollama pull gpt-oss:120b-cloud or ollama pull kimi-k2.5:cloud).",
             status="error",
             action_taken=None
         )
@@ -695,6 +810,7 @@ class CopilotRequest(BaseModel):
     file_path: Optional[str] = None
     selection: Optional[str] = None
     user_input: Optional[str] = None # Instructions or questions
+    model_name: Optional[str] = None
 
 class CopilotResponse(BaseModel):
     suggestions: List[dict] = [] # [{text: "..."}]
@@ -728,11 +844,18 @@ async def copilot_suggest(request: CopilotRequest):
     # But generally we should respect the classifier if we merge endpoints.
     # Here we assume this endpoint is called automatically by cursor movement (debounce).
     
-    # Generate prompt for LLM (Completion Mode)
-    # We need a coding model. Using config or default.
-    coding_model = "gpt-oss:120b-cloud" # Default high-quality model
-    if agent and agent.config:
-        coding_model = agent.config.get('llm', {}).get('model_name', coding_model)
+    llm_config = _get_llm_config()
+    fallback_model = "gpt-oss:120b-cloud"
+    if request.model_name and request.model_name.strip():
+        coding_model = request.model_name.strip()
+    else:
+        # Inline suggest is usually low complexity; auto router is biased toward the simple model here.
+        coding_model = _auto_route_model(
+            llm_config=llm_config,
+            text=request.user_input or "",
+            kind="suggest",
+            fallback_model=llm_config.get("model_name") or fallback_model,
+        )
 
     import httpx
     
@@ -802,9 +925,18 @@ async def copilot_refactor(request: CopilotRequest):
     context_code = request.selection or request.file_content
     instruction = request.user_input
     
-    coding_model = "gpt-oss:120b-cloud"
-    if agent and agent.config:
-        coding_model = agent.config.get('llm', {}).get('model_name', coding_model)
+    llm_config = _get_llm_config()
+    fallback_model = "gpt-oss:120b-cloud"
+    if request.model_name and request.model_name.strip():
+        coding_model = request.model_name.strip()
+    else:
+        # Refactors are generally complex; router will usually choose the complex model.
+        coding_model = _auto_route_model(
+            llm_config=llm_config,
+            text=f"{instruction or ''}\n\n{context_code or ''}",
+            kind="refactor",
+            fallback_model=llm_config.get("model_name") or fallback_model,
+        )
 
     prompt = f"""You are a coding expert. Refactor the following code based on instructions.
 Instruction: {instruction}

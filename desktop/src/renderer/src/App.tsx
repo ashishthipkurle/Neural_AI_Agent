@@ -39,6 +39,7 @@ interface Message {
     role: "user" | "assistant" | "system";
     content: string;
     image?: string;
+    kind?: "trace" | "indicator" | "system";
 }
 
 /* ================= BACKGROUND ================= */
@@ -65,7 +66,8 @@ function GeometricBackground() {
 
         let raf: number;
         const draw = () => {
-            ctx.fillStyle = "#020a12";
+            // Neutral black background
+            ctx.fillStyle = "#050505";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             nodes.forEach((n) => {
@@ -75,7 +77,7 @@ function GeometricBackground() {
                 if (n.y < 0 || n.y > canvas.height) n.vy *= -1;
             });
 
-            ctx.strokeStyle = "rgba(0,180,200,0.05)";
+            ctx.strokeStyle = "rgba(255,255,255,0.02)";
             for (let i = 0; i < nodes.length; i++) {
                 for (let j = i + 1; j < nodes.length; j++) {
                     const dx = nodes[i].x - nodes[j].x;
@@ -93,7 +95,7 @@ function GeometricBackground() {
             nodes.forEach((n) => {
                 ctx.beginPath();
                 ctx.arc(n.x, n.y, 2, 0, Math.PI * 2);
-                ctx.fillStyle = "rgba(0,200,220,0.3)";
+                ctx.fillStyle = "rgba(255,255,255,0.06)";
                 ctx.fill();
             });
 
@@ -120,19 +122,19 @@ function StatusHUD({ aiState }: { aiState: AIState }) {
     }, []);
 
     return (
-        <div className="fixed top-0 left-0 right-0 z-50 px-6 py-4 flex justify-between text-xs font-mono text-cyan-400">
+        <div className="fixed top-0 left-0 right-0 z-50 px-6 py-4 flex justify-between text-xs font-mono text-slate-300">
             <div className="flex gap-8">
                 <span className="flex items-center gap-2">
-                    <Cpu size={14} /> CPU: <b className="text-cyan-300">26%</b>
+                    <Cpu size={14} /> CPU: <b className="text-slate-100">26%</b>
                 </span>
                 <span className="flex items-center gap-2">
                     <Activity size={14} /> Status:{" "}
-                    <b className="text-cyan-300">{aiState.toUpperCase()}</b>
+                    <b className="text-slate-100">{aiState.toUpperCase()}</b>
                 </span>
             </div>
             <div className="flex gap-8">
                 <span className="flex items-center gap-2">
-                    <Wifi size={14} /> Latency: <b className="text-cyan-300">0ms</b>
+                    <Wifi size={14} /> Latency: <b className="text-slate-100">0ms</b>
                 </span>
                 <span className="flex items-center gap-2">
                     <Clock size={14} />{" "}
@@ -232,18 +234,18 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
         <div
             className="w-full h-full rounded-2xl flex flex-col"
             style={{
-                background: "rgba(5,20,30,0.65)",
-                border: "1px solid rgba(0,180,200,0.2)",
+                background: "rgba(0,0,0,0.55)",
+                border: "1px solid rgba(255,255,255,0.08)",
                 backdropFilter: "blur(10px)",
             }}
         >
             {/* Tab Header */}
-            <div className="px-2 py-2 flex items-center gap-1 border-b border-cyan-500/20">
+            <div className="px-2 py-2 flex items-center gap-1 border-b border-white/10">
                 <button
                     onClick={() => setActiveTab('history')}
                     className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'history'
-                        ? 'bg-cyan-500/20 text-cyan-300 shadow-[0_0_10px_rgba(0,180,200,0.2)]'
-                        : 'text-cyan-500/50 hover:text-cyan-400 hover:bg-cyan-500/5'
+                        ? 'bg-white/5 text-slate-100'
+                        : 'text-slate-400/70 hover:text-slate-200 hover:bg-white/5'
                         }`}
                 >
                     History
@@ -251,8 +253,8 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
                 <button
                     onClick={() => setActiveTab('analysis')}
                     className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'analysis'
-                        ? 'bg-cyan-500/20 text-cyan-300 shadow-[0_0_10px_rgba(0,180,200,0.2)]'
-                        : 'text-cyan-500/50 hover:text-cyan-400 hover:bg-cyan-500/5'
+                        ? 'bg-white/5 text-slate-100'
+                        : 'text-slate-400/70 hover:text-slate-200 hover:bg-white/5'
                         }`}
                 >
                     Analysis
@@ -276,7 +278,7 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
                             </div>
                             <button
                                 onClick={onCreateChat}
-                                className="p-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/40 text-cyan-300 transition-colors flex items-center gap-1 text-xs"
+                                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-200 transition-colors flex items-center gap-1 text-xs"
                             >
                                 <Plus size={14} />
                                 New Chat
@@ -285,14 +287,14 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
 
                         {/* Search Box */}
                         <div className="px-4 pb-3">
-                            <div className="flex rounded-lg overflow-hidden border border-cyan-500/30"
-                                style={{ background: "rgba(0,30,45,0.5)" }}>
-                                <Search size={14} className="ml-3 my-auto text-cyan-500/50" />
+                            <div className="flex rounded-lg overflow-hidden border border-white/10"
+                                style={{ background: "rgba(255,255,255,0.03)" }}>
+                                <Search size={14} className="ml-3 my-auto text-slate-300/60" />
                                 <input
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                     placeholder="Search history..."
-                                    className="flex-1 px-2 py-2 bg-transparent text-cyan-100 text-sm focus:outline-none"
+                                    className="flex-1 px-2 py-2 bg-transparent text-slate-200 text-sm focus:outline-none placeholder:text-slate-500"
                                 />
                             </div>
                         </div>
@@ -304,16 +306,16 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
                                     key={item.id}
                                     onClick={() => onSelectChat(item.id)}
                                     className={`group relative p-2.5 rounded-lg flex items-center gap-2.5 cursor-pointer transition-all border ${activeChatId === item.id
-                                        ? 'bg-cyan-500/20 border-cyan-500/50 shadow-[0_0_10px_rgba(0,200,255,0.2)]'
-                                        : 'bg-transparent border-transparent hover:bg-cyan-500/10'
+                                        ? 'bg-white/5 border-white/10'
+                                        : 'bg-transparent border-transparent hover:bg-white/5'
                                         }`}
                                 >
-                                    <div className="w-8 h-8 rounded-full bg-cyan-900/50 flex items-center justify-center border border-cyan-500/20 text-cyan-400">
+                                    <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center border border-white/10 text-slate-200">
                                         <MessageSquare size={14} />
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        <div className="text-sm text-cyan-100 truncate">{item.title || "New Chat"}</div>
-                                        <div className="text-xs text-cyan-500/50">{new Date(item.updated_at).toLocaleString()}</div>
+                                        <div className="text-sm text-slate-200 truncate">{item.title || "New Chat"}</div>
+                                        <div className="text-xs text-slate-400/70">{new Date(item.updated_at).toLocaleString()}</div>
                                     </div>
 
                                     {/* Delete Button - Visible on Hover */}
@@ -341,18 +343,18 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
                         className="flex-1 flex flex-col p-4 space-y-4 overflow-y-auto"
                     >
                         {/* Metric: Tokens Per Second */}
-                        <div className="p-4 rounded-xl border border-cyan-500/20 bg-cyan-900/10">
+                        <div className="p-4 rounded-xl border border-white/10 bg-white/5">
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-cyan-500/60 text-xs font-mono tracking-wider">THROUGHPUT</span>
-                                <Activity size={14} className="text-cyan-400" />
+                                <span className="text-slate-300/70 text-xs font-mono tracking-wider">THROUGHPUT</span>
+                                <Activity size={14} className="text-slate-200/70" />
                             </div>
                             <div className="flex items-end gap-2">
                                 <span className="text-3xl font-bold text-white">{metrics.tps.toFixed(1)}</span>
-                                <span className="text-sm text-cyan-500/60 mb-1">t/s</span>
+                                <span className="text-sm text-slate-300/70 mb-1">t/s</span>
                             </div>
-                            <div className="mt-3 h-1.5 w-full bg-cyan-900/40 rounded-full overflow-hidden">
+                            <div className="mt-3 h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
                                 <div
-                                    className="h-full bg-cyan-400 rounded-full shadow-[0_0_10px_rgba(0,200,255,0.5)] transition-all duration-500"
+                                    className="h-full bg-slate-200/70 rounded-full transition-all duration-500"
                                     style={{ width: `${Math.min(100, (metrics.tps / 100) * 100)}%` }}
                                 />
                             </div>
@@ -379,12 +381,12 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
 
                         {/* Metric: Latency Grid */}
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="p-3 rounded-xl border border-cyan-500/20 bg-cyan-900/10">
-                                <div className="text-[10px] text-cyan-500/50 mb-1">TTFT</div>
+                            <div className="p-3 rounded-xl border border-white/10 bg-white/5">
+                                <div className="text-[10px] text-slate-300/70 mb-1">TTFT</div>
                                 <div className="text-xl font-bold text-white">{metrics.ttft.toFixed(2)}s</div>
                             </div>
-                            <div className="p-3 rounded-xl border border-cyan-500/20 bg-cyan-900/10">
-                                <div className="text-[10px] text-cyan-500/50 mb-1">TOTAL</div>
+                            <div className="p-3 rounded-xl border border-white/10 bg-white/5">
+                                <div className="text-[10px] text-slate-300/70 mb-1">TOTAL</div>
                                 <div className="text-xl font-bold text-white">{metrics.totalLatency.toFixed(2)}s</div>
                             </div>
                         </div>
@@ -453,17 +455,17 @@ function CommandFeed({
 
     return (
         <div
-            className="w-full rounded-2xl flex flex-col shadow-2xl shadow-cyan-900/20"
+            className="w-full rounded-2xl flex flex-col shadow-2xl shadow-black/30"
             style={{
-                background: "rgba(5,20,30,0.85)",
-                border: "1px solid rgba(0,180,200,0.3)",
+                background: "rgba(0,0,0,0.62)",
+                border: "1px solid rgba(255,255,255,0.08)",
                 backdropFilter: "blur(20px)",
                 maxHeight: "350px" // prevent covering the globe
             }}
         >
-            <div className="px-5 py-4 flex items-center justify-between border-b border-cyan-500/10">
+            <div className="px-5 py-4 flex items-center justify-between border-b border-white/10">
                 <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${isProcessing ? 'animate-pulse bg-amber-400' : 'bg-cyan-400'}`} />
+                    <div className={`w-3 h-3 rounded-full ${isProcessing ? 'animate-pulse bg-amber-400' : 'bg-slate-300/70'}`} />
                     <span className="text-lg font-medium text-white tracking-wide">
                         {isProcessing ? 'Processing...' : 'Command Feed'}
                     </span>
@@ -471,24 +473,24 @@ function CommandFeed({
 
                 {/* Integrated Controls */}
                 <div className="flex items-center gap-2">
-                    <button onClick={onToggleCode} className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Code Editor">
+                    <button onClick={onToggleCode} className="p-2 rounded-lg hover:bg-white/5 text-slate-300 hover:text-slate-100 transition-colors" title="Code Editor">
                         <Code size={18} />
                     </button>
-                    <button onClick={onToggleCamera} className={`p-2 rounded-lg hover:bg-cyan-500/10 transition-colors ${liveFeedMode === 'camera' ? 'text-cyan-300 bg-cyan-500/20' : 'text-cyan-400'}`} title="Camera Mode">
+                    <button onClick={onToggleCamera} className={`p-2 rounded-lg hover:bg-white/5 transition-colors ${liveFeedMode === 'camera' ? 'text-slate-100 bg-white/5' : 'text-slate-300'}`} title="Camera Mode">
                         <Eye size={18} />
                     </button>
-                    <button onClick={onToggleCCTV} className={`p-2 rounded-lg hover:bg-cyan-500/10 transition-colors ${liveFeedMode === 'cctv' ? 'text-red-400 bg-red-500/20' : 'text-cyan-400'}`} title="Surveillance">
+                    <button onClick={onToggleCCTV} className={`p-2 rounded-lg hover:bg-white/5 transition-colors ${liveFeedMode === 'cctv' ? 'text-red-400 bg-red-500/20' : 'text-slate-300'}`} title="Surveillance">
                         <Camera size={18} />
                     </button>
-                    <button onClick={onToggleMute} className={`p-2 rounded-lg hover:bg-cyan-500/10 transition-colors ${isMuted ? 'text-red-400' : 'text-cyan-400'}`} title="Toggle Mic">
+                    <button onClick={onToggleMute} className={`p-2 rounded-lg hover:bg-white/5 transition-colors ${isMuted ? 'text-red-400' : 'text-slate-300'}`} title="Toggle Mic">
                         {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
                     </button>
-                    <button className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 transition-colors" title="Files">
+                    <button className="p-2 rounded-lg hover:bg-white/5 text-slate-300 hover:text-slate-100 transition-colors" title="Files">
                         <FolderOpen size={18} />
                     </button>
                     <button
                         onClick={onToggleDashboard}
-                        className="px-3 py-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 transition-colors flex items-center gap-2"
+                        className="px-3 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-slate-100 transition-colors flex items-center gap-2"
                         title="Open Dashboard"
                     >
                         <Settings size={16} />
@@ -499,21 +501,21 @@ function CommandFeed({
 
             <div
                 ref={listRef}
-                className="flex-1 px-5 py-4 space-y-4 text-base text-cyan-100/90 overflow-y-auto min-h-[150px]"
+                className="flex-1 px-5 py-4 space-y-4 text-base text-slate-200/90 overflow-y-auto min-h-[150px]"
             >
                 {messages.map((m) => (
                     <div
                         key={m.id}
                         className={`p-3 rounded-xl text-sm ${m.role === 'assistant'
-                            ? 'bg-cyan-900/20 border-l-4 border-cyan-500/40'
+                            ? 'bg-white/5 border-l-4 border-white/10'
                             : m.role === 'system'
-                                ? 'bg-amber-900/10 border-l-4 border-amber-500/40 italic text-cyan-500/60 text-xs'
+                                ? 'bg-amber-900/10 border-l-4 border-amber-500/40 italic text-slate-300/70 text-xs'
                                 : 'bg-slate-800/40 border-l-4 border-slate-500/40 ml-8'
                             }`}
                     >
                         {m.image && (
                             <div className="mb-2">
-                                <img src={`data:image/png;base64,${m.image}`} alt="Sent content" className="max-w-full h-auto rounded-lg border border-cyan-500/30 max-h-60 object-contain" />
+                                <img src={`data:image/png;base64,${m.image}`} alt="Sent content" className="max-w-full h-auto rounded-lg border border-white/10 max-h-60 object-contain" />
                             </div>
                         )}
                         {m.content}
@@ -542,7 +544,7 @@ function CommandFeed({
                     setImagePreview(null);
                     if (fileInputRef.current) fileInputRef.current.value = ""; // Reset file input
                 }}
-                className="p-4 border-t border-cyan-500/10 flex flex-col gap-2"
+                className="p-4 border-t border-white/10 flex flex-col gap-2"
             >
                 {/* Image Preview - Inside the box now */}
                 {imagePreview && (
@@ -550,7 +552,7 @@ function CommandFeed({
                         <img
                             src={imagePreview}
                             alt="Attached"
-                            className="h-16 rounded border border-cyan-500/30 object-contain bg-black/50"
+                            className="h-16 rounded border border-white/10 object-contain bg-black/40"
                         />
                         <button
                             type="button"
@@ -566,7 +568,7 @@ function CommandFeed({
                     </div>
                 )}
 
-                <div className={`flex rounded-xl overflow-hidden border transition-colors ${isProcessing ? 'border-slate-700 opacity-50 cursor-not-allowed' : 'border-cyan-500/30 hover:border-cyan-500/50'
+                <div className={`flex rounded-xl overflow-hidden border transition-colors ${isProcessing ? 'border-slate-700 opacity-50 cursor-not-allowed' : 'border-white/10 hover:border-white/20'
                     }`}>
                     {/* Hidden File Input */}
                     <input
@@ -593,7 +595,7 @@ function CommandFeed({
                         type="button"
                         disabled={isProcessing}
                         onClick={() => fileInputRef.current?.click()}
-                        className={`px-3 flex items-center justify-center transition-colors ${isProcessing ? 'text-slate-600' : 'text-cyan-500/60 hover:text-cyan-400 hover:bg-cyan-500/10'}`}
+                        className={`px-3 flex items-center justify-center transition-colors ${isProcessing ? 'text-slate-600' : 'text-slate-300/70 hover:text-slate-100 hover:bg-white/5'}`}
                         title="Attach image (chart screenshot)"
                     >
                         <Paperclip size={18} />
@@ -603,11 +605,11 @@ function CommandFeed({
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         placeholder={isProcessing ? "Wait for response..." : "Type a command..."}
-                        className="flex-1 px-4 py-3 bg-black/20 text-cyan-100 text-base focus:outline-none placeholder-cyan-500/30 disabled:cursor-not-allowed"
+                        className="flex-1 px-4 py-3 bg-black/20 text-slate-200 text-base focus:outline-none placeholder:text-slate-500 disabled:cursor-not-allowed"
                     />
                     <button
                         disabled={isProcessing}
-                        className={`px-4 text-black transition-colors ${isProcessing ? 'bg-slate-600' : 'bg-cyan-400 hover:bg-cyan-300'
+                        className={`px-4 text-black transition-colors ${isProcessing ? 'bg-slate-600' : 'bg-slate-200 hover:bg-slate-100'
                             }`}
                     >
                         <Send size={18} />
@@ -637,16 +639,16 @@ function OrbitButton({
             style={{
                 left: `calc(50% + ${x}px - 28px)`,
                 top: `calc(50% + ${y}px - 28px)`,
-                background: "rgba(0,25,40,0.7)",
-                border: "1px solid rgba(0,200,220,0.35)",
+                background: "rgba(0,0,0,0.55)",
+                border: "1px solid rgba(255,255,255,0.10)",
                 boxShadow: active
-                    ? "0 0 20px rgba(0,200,220,0.5)"
+                    ? "0 0 20px rgba(255,255,255,0.12)"
                     : "none",
                 backdropFilter: "blur(6px)",
             }}
             whileHover={{ scale: 1.1 }}
         >
-            <Icon size={18} className="text-cyan-300" />
+            <Icon size={18} className="text-slate-200" />
         </motion.button>
     );
 }
@@ -730,12 +732,12 @@ function LiveFeedPanel({ mode = "idle", videoRef }: LiveFeedPanelProps) {
             ref={panelRef}
             className={`w-full h-full rounded-2xl flex flex-col overflow-hidden ${isFullscreen ? 'fixed inset-0 z-50' : ''}`}
             style={{
-                background: "rgba(5,20,30,0.65)",
-                border: "1px solid rgba(0,180,200,0.2)",
+                background: "rgba(0,0,0,0.55)",
+                border: "1px solid rgba(255,255,255,0.08)",
                 backdropFilter: "blur(10px)",
             }}
         >
-            <div className="px-4 py-3 flex items-center gap-2 border-b border-cyan-500/10">
+            <div className="px-4 py-3 flex items-center gap-2 border-b border-white/10">
                 <div className={`w-2.5 h-2.5 rounded-full ${mode === 'idle' ? 'bg-gray-500' : 'bg-red-500 animate-pulse'}`} />
                 <span className="text-base font-medium text-white">
                     {mode === 'camera' ? 'Camera Feed' : mode === 'cctv' ? 'Surveillance' : 'System Vision'}
@@ -743,31 +745,31 @@ function LiveFeedPanel({ mode = "idle", videoRef }: LiveFeedPanelProps) {
                 <div className="ml-auto flex items-center gap-2">
                     <button
                         onClick={toggleFullscreen}
-                        className="p-1.5 rounded-lg hover:bg-cyan-500/20 transition-colors"
+                        className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"
                         title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
                     >
                         {isFullscreen ? (
-                            <Minimize2 size={16} className="text-cyan-500/60 hover:text-cyan-400" />
+                            <Minimize2 size={16} className="text-slate-300/70 hover:text-slate-100" />
                         ) : (
-                            <Maximize2 size={16} className="text-cyan-500/60 hover:text-cyan-400" />
+                            <Maximize2 size={16} className="text-slate-300/70 hover:text-slate-100" />
                         )}
                     </button>
-                    <Activity size={16} className="text-cyan-500/40" />
+                    <Activity size={16} className="text-slate-300/40" />
                 </div>
             </div>
 
             <div className="flex-1 relative bg-black/40 flex items-center justify-center overflow-hidden">
                 {mode === 'idle' && (
                     <div className="text-center p-6">
-                        <div className="w-16 h-16 rounded-full border-2 border-dashed border-cyan-500/20 mx-auto flex items-center justify-center mb-4">
-                            <Eye size={24} className="text-cyan-500/40" />
+                        <div className="w-16 h-16 rounded-full border-2 border-dashed border-white/10 mx-auto flex items-center justify-center mb-4">
+                            <Eye size={24} className="text-slate-300/40" />
                         </div>
-                        <div className="text-cyan-500/40 text-sm font-mono tracking-widest">NO ACTIVE FEED</div>
+                        <div className="text-slate-300/40 text-sm font-mono tracking-widest">NO ACTIVE FEED</div>
                     </div>
                 )}
 
                 {mode === 'camera' && (
-                    <div className="absolute inset-0 bg-[#020a12] flex flex-col">
+                    <div className="absolute inset-0 bg-[#050505] flex flex-col">
                         <div className="flex-1 relative overflow-hidden">
                             {error ? (
                                 <div className="absolute inset-0 flex items-center justify-center text-red-400 font-mono text-xs">
@@ -789,14 +791,14 @@ function LiveFeedPanel({ mode = "idle", videoRef }: LiveFeedPanelProps) {
                                     boxShadow: "inset 0 0 50px rgba(0,0,0,0.8)"
                                 }}
                             >
-                                <div className="absolute top-4 right-4 text-cyan-500 font-mono text-xs">LIVE</div>
-                                <div className="absolute bottom-4 left-4 text-cyan-500/50 font-mono text-[10px]">
+                                <div className="absolute top-4 right-4 text-slate-200/80 font-mono text-xs">LIVE</div>
+                                <div className="absolute bottom-4 left-4 text-slate-200/50 font-mono text-[10px]">
                                     {error ? "OFFLINE" : "SIGNAL: STRONG"}
                                 </div>
                             </div>
                         </div>
 
-                        <div className="p-3 border-t border-cyan-500/20 bg-cyan-900/10 flex justify-between text-xs font-mono text-cyan-400/60">
+                        <div className="p-3 border-t border-white/10 bg-white/5 flex justify-between text-xs font-mono text-slate-300/70">
                             <span>CAM-01</span>
                             <span className={!error ? "text-red-400 animate-pulse" : ""}>{!error ? "REC ●" : "ERR"}</span>
                         </div>
@@ -804,10 +806,10 @@ function LiveFeedPanel({ mode = "idle", videoRef }: LiveFeedPanelProps) {
                 )}
 
                 {mode === 'cctv' && (
-                    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-[1px] bg-cyan-900/20">
+                    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-[1px] bg-white/5">
                         {/* CAM-01: Live Stream */}
-                        <div className="relative bg-[#05101a] overflow-hidden border border-cyan-500/10">
-                            <div className="absolute top-2 left-2 z-10 text-[10px] font-mono text-cyan-500/80 bg-black/50 px-1">CAM-01 • LIVE</div>
+                        <div className="relative bg-[#0b141a] overflow-hidden border border-white/10">
+                            <div className="absolute top-2 left-2 z-10 text-[10px] font-mono text-slate-200/70 bg-black/40 px-1">CAM-01 • LIVE</div>
                             <img
                                 src="http://localhost:8000/api/video_feed"
                                 alt="Live Feed"
@@ -820,10 +822,10 @@ function LiveFeedPanel({ mode = "idle", videoRef }: LiveFeedPanelProps) {
                         </div>
                         {/* CAM-02, 03, 04: Placeholders */}
                         {[2, 3, 4].map(i => (
-                            <div key={i} className="relative bg-[#05101a] flex items-center justify-center border border-cyan-500/10">
-                                <div className="absolute top-2 left-2 text-[10px] font-mono text-cyan-500/40">CAM-0{i}</div>
-                                <div className="w-8 h-8 rounded-full border border-cyan-500/20 flex items-center justify-center">
-                                    <div className="w-1 h-1 bg-cyan-500/40 rounded-full" />
+                            <div key={i} className="relative bg-[#0b141a] flex items-center justify-center border border-white/10">
+                                <div className="absolute top-2 left-2 text-[10px] font-mono text-slate-300/40">CAM-0{i}</div>
+                                <div className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center">
+                                    <div className="w-1 h-1 bg-slate-300/40 rounded-full" />
                                 </div>
                             </div>
                         ))}
@@ -854,6 +856,13 @@ export default function NeuralInterface() {
     const [audioAnalyzer, setAudioAnalyzer] = useState<AnalyserNode | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+
+    useEffect(() => {
+        // Ensure Code Editor can always be opened even if the on-screen controls are not visible.
+        window.electronAPI?.menu?.onToggleCodeEditor?.(() => {
+            setShowCodeEditor((prev) => !prev);
+        });
+    }, []);
 
     // Metrics State (Dynamic)
     const [metrics, setMetrics] = useState<Metrics>({
@@ -1051,23 +1060,47 @@ export default function NeuralInterface() {
             if (type === "action") setAiState("thinking");
             if (type === "status" && text === "Done") setAiState("idle");
 
+            // Fallback: long-running missions can be triggered remotely (e.g., Telegram) and may not emit
+            // a local-only "Done" status via the pipeline. If we detect mission completion/failure in any
+            // event text, force idle to clear the UI processing state.
+            if (!partial) {
+                const isMissionTerminal =
+                    lowerText.includes("mission complete") ||
+                    lowerText.includes("mission completed") ||
+                    lowerText.includes("mission failed") ||
+                    lowerText.includes("mission aborted") ||
+                    lowerText.includes("mission ended");
+
+                if (isMissionTerminal) setAiState("idle");
+            }
+
             const detectedProjectPath = extractProjectPathFromText(text || "");
             if (detectedProjectPath) {
                 setCodeEditorProjectPath(detectedProjectPath);
-                setShowCodeEditor(true);
             }
 
             // Auto-open in-app code editor for visible coding workflow.
-            if (
+            const isCodingWorkflowSignal =
                 (type === "action" || type === "status") &&
                 (
-                    lowerText.includes("react") ||
-                    lowerText.includes("website") ||
                     lowerText.includes("scaffold") ||
-                    lowerText.includes("project") ||
-                    lowerText.includes("coding")
-                )
-            ) {
+                    lowerText.includes("npm run dev") ||
+                    lowerText.includes("dev server") ||
+                    lowerText.includes("code generation") ||
+                    lowerText.includes("refactor") ||
+                    lowerText.includes("coding skill")
+                );
+
+            const isNonCodingMissionSignal =
+                lowerText.includes("mission complete") ||
+                lowerText.includes("research complete") ||
+                lowerText.includes("report saved") ||
+                lowerText.includes("delivered via telegram") ||
+                lowerText.includes("telegram") ||
+                lowerText.includes("generated/") ||
+                lowerText.includes(".md");
+
+            if (isCodingWorkflowSignal && !isNonCodingMissionSignal) {
                 setShowCodeEditor(true);
             }
 
@@ -1114,7 +1147,8 @@ export default function NeuralInterface() {
                             return [...withoutLoading, {
                                 id: "loading-indicator",
                                 role: "system",
-                                content: "Processing..."
+                                content: "Processing...",
+                                kind: "indicator"
                             }];
                         }
 
@@ -1124,7 +1158,8 @@ export default function NeuralInterface() {
                             return [...withoutListening, {
                                 id: "listening-indicator",
                                 role: "system",
-                                content: "Listening..."
+                                content: "Listening...",
+                                kind: "indicator"
                             }];
                         }
 
@@ -1203,7 +1238,8 @@ export default function NeuralInterface() {
                         return [...prev, {
                             id: messageId,
                             role: "system",
-                            content: text
+                            content: text,
+                            kind: "trace"
                         }];
                     }
 
@@ -1211,7 +1247,8 @@ export default function NeuralInterface() {
                     return [...prev, {
                         id: messageId,
                         role: "system",
-                        content: text
+                        content: text,
+                        kind: "system"
                     }];
                 });
             }
@@ -1322,11 +1359,39 @@ export default function NeuralInterface() {
             if (imageData) payload.image = imageData;
 
             // Trigger command via backend API
-            await fetch('http://localhost:8000/api/chat', {
+            const httpResponse = await fetch('http://localhost:8000/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
+
+            // Fallback completion path: if websocket completion events are delayed/missed,
+            // use HTTP response body to unblock UI and show result.
+            const body = await httpResponse.json().catch(() => null);
+            const responseText = typeof body?.response === 'string' ? body.response.trim() : '';
+            if (responseText) {
+                setMessages((prev) => {
+                    const withoutIndicators = prev.filter(
+                        (m) => m.id !== 'loading-indicator' && m.id !== 'listening-indicator' && m.id !== 'partial-stt'
+                    );
+                    if (withoutIndicators.length > 0) {
+                        const last = withoutIndicators[withoutIndicators.length - 1];
+                        if (last.role === 'assistant' && last.content === responseText) {
+                            return withoutIndicators;
+                        }
+                    }
+                    return [
+                        ...withoutIndicators,
+                        {
+                            id: `${Date.now()}-http-fallback`,
+                            role: 'assistant',
+                            content: responseText
+                        }
+                    ];
+                });
+            }
+
+            setAiState('idle');
 
         } catch (error) {
             console.error("Sync interaction failed:", error);
@@ -1335,6 +1400,7 @@ export default function NeuralInterface() {
                 role: "system",
                 content: "⚠️ Connection lost to Python brain. Terminal interface only."
             }]);
+            setAiState('idle');
         }
     };
 
@@ -1363,7 +1429,7 @@ export default function NeuralInterface() {
                 />
             )}
             <Dashboard isOpen={showDashboard} onClose={() => setShowDashboard(false)} />
-            <div className="min-h-screen relative overflow-hidden bg-[#020a12]">
+            <div className="min-h-screen relative overflow-hidden bg-[#050505]">
                 <GeometricBackground />
                 <StatusHUD aiState={aiState} />
 
@@ -1386,8 +1452,15 @@ export default function NeuralInterface() {
                 {/* BOTTOM - Command Feed (Expanded) */}
                 <div className="fixed bottom-4 left-[480px] right-[480px] z-30 px-6 flex justify-center">
                     <div className="w-full max-w-3xl">
+                        {(() => {
+                            const isBusy = aiState === "thinking" || aiState === "speaking" || aiState === "listening";
+                            const visibleMessages = isBusy
+                                ? messages
+                                : messages.filter((m) => m.kind !== "trace" && m.kind !== "indicator");
+
+                            return (
                         <CommandFeed
-                            messages={messages}
+                            messages={visibleMessages}
                             onSend={handleCommand}
                             isProcessing={aiState === "thinking" || aiState === "speaking"}
                             onToggleMute={toggleMute}
@@ -1398,6 +1471,8 @@ export default function NeuralInterface() {
                             liveFeedMode={liveFeedMode}
                             onToggleDashboard={() => setShowDashboard(true)}
                         />
+                            );
+                        })()}
                     </div>
                 </div>
 
@@ -1421,7 +1496,7 @@ export default function NeuralInterface() {
                     </div>
                 </div>
 
-                <div className="fixed bottom-3 left-1/2 -translate-x-1/2 text-xs tracking-[0.4em] text-cyan-500/50 font-mono">
+                <div className="fixed bottom-3 left-1/2 -translate-x-1/2 text-xs tracking-[0.4em] text-slate-300/40 font-mono">
                     NEURAL INTERFACE V2.0
                 </div>
             </div>

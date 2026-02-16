@@ -73,6 +73,24 @@ class MissionControlSkill(BaseSkill):
         if not goal:
             return SkillResult(success=False, error="Mission requires a goal.")
 
+        def _emit_done() -> None:
+            """Best-effort signal to clear UI processing indicators."""
+            reporter = self._runtime_reporter
+            if reporter is None and self._agent is not None:
+                reporter = getattr(self._agent, "sync_broadcast", None)
+            if not reporter:
+                return
+            try:
+                reporter("status", "system", "Done")
+            except TypeError:
+                # Back-compat with any reporter that doesn't accept status events.
+                try:
+                    reporter("action", "system", "[Mission] Done")
+                except Exception:
+                    return
+            except Exception:
+                return
+
         constraints = self._extract_goal_constraints(goal)
 
         await self._report(f"Mission: {goal}")
@@ -81,6 +99,7 @@ class MissionControlSkill(BaseSkill):
         plan_result = await self._call_skill("planning", "plan", {"goal": goal})
         if not plan_result.success:
             await self._report(f"Planning failed: {plan_result.error}")
+            _emit_done()
             return SkillResult(success=False, error=plan_result.error)
 
         plan = plan_result.data.get("plan") if plan_result.data else {}
@@ -106,6 +125,20 @@ class MissionControlSkill(BaseSkill):
             
             await self._report(f"Step {step_id}: {desc}", silent=True)
             
+            # ---- PRE-STEP: Before screenshot, restore dev server in browser ----
+            if skill == "vision" and action == "screenshot":
+                dev_url = getattr(self, "_mission_dev_url", None)
+                if dev_url:
+                    self.logger.info(f"Restoring dev server {dev_url} in browser before screenshot...")
+                    try:
+                        nav_r = await self._call_skill("browser", "navigate", {"url": dev_url})
+                        if nav_r.success:
+                            import asyncio as _aio2
+                            await _aio2.sleep(3)  # let page render
+                            self.logger.info("Browser showing dev site for screenshot.")
+                    except Exception as _e:
+                        self.logger.warning(f"Could not restore dev URL before screenshot: {_e}")
+
             # Pass previous result to next step via context
             step_context = {"previous_result": previous_result}
             
@@ -116,6 +149,8 @@ class MissionControlSkill(BaseSkill):
             step_max_retries = 1 if is_browser_chat_loop else MAX_RETRIES
             
             for attempt in range(1, step_max_retries + 1):
+                if attempt == 1 and skill == "coding" and action == "scaffold_react_website":
+                    await self._report("coding skill scaffold in progress", silent=True)
                 step_result = await self._call_skill(skill, action, step_params, step_context)
                 
                 if step_result.success:
@@ -129,6 +164,31 @@ class MissionControlSkill(BaseSkill):
             
             if step_result and step_result.success:
                 previous_result = step_result.data
+
+                # ---- AUTO-OPEN: after coding builds a site, navigate browser to it ----
+                if skill == "coding" and action == "scaffold_react_website":
+                    await self._report("coding skill scaffold started", silent=True)
+                    project_path = (previous_result or {}).get("project_path") if isinstance(previous_result, dict) else None
+                    if project_path:
+                        await self._report(f"coding skill project_path: '{project_path}'", silent=True)
+                    local_url = (previous_result or {}).get("local_url") if isinstance(previous_result, dict) else None
+                    if local_url:
+                        self.logger.info(f"Dev server running at {local_url}. Opening in browser...")
+                        await self._report(f"Opening {local_url} in browser...", silent=True)
+                        try:
+                            nav_result = await self._call_skill("browser", "navigate", {"url": local_url})
+                            if nav_result.success:
+                                import asyncio as _aio
+                                await _aio.sleep(4)  # let page render fully
+                                self.logger.info("Browser loaded the running site.")
+                            else:
+                                self.logger.warning(f"Browser navigate failed: {nav_result.error}")
+                        except Exception as nav_exc:
+                            self.logger.warning(f"Could not open site in browser: {nav_exc}")
+                    # Store URL in context for later steps (e.g. screenshot)
+                    if not hasattr(self, "_mission_dev_url"):
+                        self._mission_dev_url = local_url
+
                 await self._report(f"Step {step_id} done.", silent=True)
                 step_index += 1
             else:
@@ -186,6 +246,7 @@ class MissionControlSkill(BaseSkill):
                     except Exception as report_err:
                         self.logger.warning(f"Failed to send partial mission report: {report_err}")
 
+                    _emit_done()
                     return SkillResult(success=False, error=f"Mission failed at step {step_id}")
 
         # Report final result if available
@@ -205,6 +266,7 @@ class MissionControlSkill(BaseSkill):
                         "path": report_path,
                         "caption": f"Mission Report: {goal}"
                     })
+                    _emit_done()
                     return SkillResult(success=True, message="Mission Complete (Report sent)")
                 except Exception as e:
                     self.logger.error(f"Failed to send report file: {e}")
@@ -243,6 +305,7 @@ class MissionControlSkill(BaseSkill):
                             "path": str(file_path),
                             "caption": f"Mission Report: {goal}"
                         })
+                        _emit_done()
                         return SkillResult(success=True, message="Mission Complete (Sent as file)")
                         
                     except Exception as e:
@@ -262,6 +325,7 @@ class MissionControlSkill(BaseSkill):
                 final_msg += f"\n\nResult: {result_str}"
         
         await self._report(final_msg)
+        _emit_done()
         return SkillResult(success=True, message="Mission Complete")
 
     async def _call_skill(self, skill_name: str, action: str, params: Dict, context: Dict = None) -> SkillResult:

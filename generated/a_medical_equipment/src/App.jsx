@@ -10,7 +10,7 @@ export default function App() {
     <div className="app">
       <header className="site-header">
         <div className="site-container nav-wrap">
-          <div className="brand">A Medical Equipment Business</div>
+          <div className="brand">A Medical Equipment</div>
           <nav>
             <a href="#home">Home</a>
             <a href="#about">About</a>
@@ -22,7 +22,7 @@ export default function App() {
       </header>
 
       <main>
-        <HeroSection businessTitle="A Medical Equipment Business" />
+        <HeroSection businessTitle="A Medical Equipment" />
         <AboutSection />
         <ProductsSection />
         <TestimonialsSection />
@@ -31,7 +31,7 @@ export default function App() {
 
       <footer className="site-footer">
         <div className="site-container footer-wrap">
-          <p>© {new Date().getFullYear()} A Medical Equipment Business. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} A Medical Equipment. All rights reserved.</p>
           <p>Reliable equipment. Trusted care.</p>
         </div>
       </footer>

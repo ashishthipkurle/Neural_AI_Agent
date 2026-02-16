@@ -1,5 +1,6 @@
 
 import logging
+import os
 import time
 import asyncio
 from typing import List, Dict, Any, Optional
@@ -34,6 +35,7 @@ class AdvancedBrowserSkill(BaseSkill):
         self.browser = None
         self.context = None
         self.page = None
+        self._browser_pid = None
 
     @property
     def name(self) -> str:
@@ -81,6 +83,10 @@ class AdvancedBrowserSkill(BaseSkill):
                 headless=self.headless,
                 args=args
             )
+            try:
+                self._browser_pid = self.browser.process.pid if getattr(self.browser, "process", None) else None
+            except Exception:
+                self._browser_pid = None
             
             # Create context but DON'T create a page yet (avoids about:blank on startup)
             self.context = await self.browser.new_context(
@@ -101,11 +107,123 @@ class AdvancedBrowserSkill(BaseSkill):
             self.logger.error(f"Traceback:\n{traceback.format_exc()}")
             self._health = SkillHealth.DEGRADED
 
-    async def _ensure_page(self):
-        """Create page on first use (lazy init to avoid about:blank on startup)."""
-        if not self.page and self.context:
+    async def _is_page_alive(self) -> bool:
+        """Check if the current page/browser connection is still alive."""
+        if not self.page:
+            return False
+        try:
+            await self.page.title()  # lightweight probe
+            return True
+        except Exception:
+            return False
+
+    async def _recover_browser(self):
+        """Tear down dead browser and re-launch from scratch."""
+        self.logger.warning("Browser connection lost. Recovering...")
+        # Close stale handles silently
+        for obj_name in ("page", "context", "browser", "playwright"):
+            obj = getattr(self, obj_name, None)
+            if obj:
+                try:
+                    if hasattr(obj, 'close'):
+                        await obj.close()
+                    elif hasattr(obj, 'stop'):
+                        await obj.stop()
+                except Exception:
+                    pass
+            setattr(self, obj_name, None)
+        # Re-init
+        self._loaded = False
+        await self.on_start()
+        self.logger.info("Browser recovered successfully." if self.context else "Browser recovery FAILED.")
+
+    async def _recycle_page(self):
+        """Close current page and create a fresh one to release DOM memory."""
+        if self.page:
+            try:
+                await self.page.close()
+            except Exception:
+                pass
+            self.page = None
+        if self.context:
             self.page = await self.context.new_page()
-            self.logger.info("Browser page created (first use).")
+            self.logger.info("Browser page recycled (fresh page).")
+
+    async def _ensure_page(self):
+        """Create page on first use, or recover if the browser crashed."""
+        # Check if existing page is alive
+        if self.page:
+            if await self._is_page_alive():
+                return
+            # Page exists but is dead — recycle or recover
+            self.logger.warning("Page is stale (browser may have crashed).")
+            self.page = None
+
+        if self.context:
+            try:
+                self.page = await self.context.new_page()
+                self.logger.info("Browser page created (first use).")
+            except Exception:
+                # Context is also dead — full recovery
+                await self._recover_browser()
+                if self.context:
+                    self.page = await self.context.new_page()
+        else:
+            await self._recover_browser()
+            if self.context:
+                self.page = await self.context.new_page()
+
+    def _bring_browser_to_foreground(self):
+        """Raise Chromium window to foreground so user can see it."""
+        if os.name != "nt" or self.headless:
+            return
+        target_pid = self._browser_pid
+        if not target_pid:
+            return
+        try:
+            import win32con
+            import win32gui
+            import win32process
+        except Exception:
+            return
+
+        found_hwnd = None
+
+        def _cb(hwnd, _):
+            nonlocal found_hwnd
+            if found_hwnd:
+                return
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                if pid == target_pid and win32gui.GetWindowText(hwnd):
+                    found_hwnd = hwnd
+            except Exception:
+                pass
+
+        try:
+            win32gui.EnumWindows(_cb, None)
+            if found_hwnd:
+                win32gui.ShowWindow(found_hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(found_hwnd)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_browser_crash_error(error: Exception) -> bool:
+        err_str = str(error).lower()
+        crash_signatures = [
+            "epipe",
+            "broken pipe",
+            "connection closed",
+            "target page, context or browser has been closed",
+            "browser has been closed",
+            "target closed",
+            "transport closed",
+            "pipe closed",
+        ]
+        return any(sig in err_str for sig in crash_signatures)
 
     async def on_unload(self):
         """Cleanup."""
@@ -120,6 +238,11 @@ class AdvancedBrowserSkill(BaseSkill):
     async def execute(self, action: str, params: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> SkillResult:
         self.logger.info(f"Browser executing: {action} (Headless: {self.headless})")
         
+        # Handle page recycle action (no page needed)
+        if action == "recycle_page":
+            await self._recycle_page()
+            return SkillResult(success=True, message="Page recycled.")
+
         # Ensure browser is initialized
         if not self.context:
             if self.health() == SkillHealth.UNAVAILABLE:
@@ -129,8 +252,17 @@ class AdvancedBrowserSkill(BaseSkill):
             if not self.context:
                  return SkillResult(success=False, error="Failed to initialize browser.")
 
-        # Ensure page exists (lazy creation on first use)
-        await self._ensure_page()
+        # Ensure page exists (lazy creation / crash recovery)
+        try:
+            await self._ensure_page()
+        except Exception as e:
+            if self._is_browser_crash_error(e):
+                self.logger.error(f"Browser crash detected while preparing page: {e}")
+                await self._recover_browser()
+                return SkillResult(success=False, error="Browser crashed and was recovered. Retry the action.")
+            self.logger.warning(f"Failed to prepare page for '{action}': {e}")
+            return SkillResult(success=False, error=str(e))
+
         if not self.page:
             return SkillResult(success=False, error="Failed to create page.")
 
@@ -141,6 +273,7 @@ class AdvancedBrowserSkill(BaseSkill):
                 
                 # Bring window to front so user can see the navigation
                 await self.page.bring_to_front()
+                self._bring_browser_to_foreground()
                 
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 title = await self.page.title()
@@ -189,6 +322,7 @@ class AdvancedBrowserSkill(BaseSkill):
                     return SkillResult(success=False, error="No search query provided.")
                 url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
                 await self.page.bring_to_front()
+                self._bring_browser_to_foreground()
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 title = await self.page.title()
                 self.logger.info(f"Google search: {query} -> {title}")
@@ -199,6 +333,7 @@ class AdvancedBrowserSkill(BaseSkill):
                 query = params.get('query', '')
                 url = params.get('url', 'https://chatgpt.com')
                 await self.page.bring_to_front()
+                self._bring_browser_to_foreground()
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 title = await self.page.title()
                 self.logger.info(f"AI consult page loaded: {title}")
@@ -572,6 +707,11 @@ class AdvancedBrowserSkill(BaseSkill):
                 )
         
         except Exception as e:
+            # Detect fatal Playwright/browser crashes (EPIPE, connection closed, etc.)
+            if self._is_browser_crash_error(e):
+                self.logger.error(f"Browser crash detected during '{action}': {e}")
+                await self._recover_browser()
+                return SkillResult(success=False, error=f"Browser crashed and was recovered. Retry the action.")
             self.logger.warning(f"Browser action '{action}' failed: {e}")
             return SkillResult(success=False, error=str(e))
             

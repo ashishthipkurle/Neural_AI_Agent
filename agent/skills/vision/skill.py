@@ -145,18 +145,23 @@ class VisionSkill(BaseSkill):
     # ==================== ACTIONS ====================
     
     def _action_screenshot(self, params: Dict, context: Dict) -> SkillResult:
-        """Capture screenshot."""
+        """Capture screenshot of the current screen."""
         path = params.get("path", self.SCREENSHOTS_DIR / f"screen_{int(time.time())}.png")
         region = params.get("region")  # (x, y, width, height)
-        
+        settle_delay = params.get("settle_delay", 2)  # seconds to wait for render
+
         try:
             import pyautogui
-            
+
+            # Brief delay to let any recently-opened page fully render
+            if settle_delay and settle_delay > 0:
+                time.sleep(settle_delay)
+
             if region:
                 screenshot = pyautogui.screenshot(region=region)
             else:
                 screenshot = pyautogui.screenshot()
-            
+
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             screenshot.save(str(path))
             

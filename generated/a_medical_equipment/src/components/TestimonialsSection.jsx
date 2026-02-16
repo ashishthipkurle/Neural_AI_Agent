@@ -1,21 +1,9 @@
 import React from 'react';
 
 const testimonials = [
-  {
-    name: 'Dr. L. Carter',
-    org: 'Northside Clinic',
-    quote: 'Excellent support and equipment quality. Delivery timelines were exactly as committed.'
-  },
-  {
-    name: 'A. Thompson',
-    org: 'CityCare Hospital',
-    quote: 'Their team helped us choose the right devices and handled onboarding smoothly.'
-  },
-  {
-    name: 'M. Singh',
-    org: 'HomeCare Plus',
-    quote: 'Dependable products and responsive post-sales service every time.'
-  }
+  { name: 'Dr. L. Carter', org: 'Northside Clinic', quote: 'Excellent support and equipment quality.' },
+  { name: 'A. Thompson', org: 'CityCare Hospital', quote: 'Their team helped us choose the right devices smoothly.' },
+  { name: 'M. Singh', org: 'HomeCare Plus', quote: 'Dependable products and responsive post-sales service.' }
 ];
 
 export default function TestimonialsSection() {
@@ -26,7 +14,7 @@ export default function TestimonialsSection() {
         <div className="cards-grid">
           {testimonials.map((item) => (
             <article key={item.name} className="testimonial-card">
-              <p>“{item.quote}”</p>
+              <p>"{item.quote}"</p>
               <h4>{item.name}</h4>
               <span>{item.org}</span>
             </article>

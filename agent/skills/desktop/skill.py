@@ -475,7 +475,7 @@ class DesktopSkill(BaseSkill):
             return SkillResult(success=False, error="No content to write")
         
         # Ensure it's in a safe location
-        if not filename.startswith(("agent/", "output/", "D:", "C:")):
+        if not filename.startswith(("agent/", "output/", "generated/", "workspace/", "D:", "C:")):
             filename = f"agent/data/outputs/{filename}"
         
         filepath = Path(filename)

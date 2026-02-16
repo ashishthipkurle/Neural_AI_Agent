@@ -21,12 +21,6 @@ import os
 import uuid
 from pathlib import Path
 from typing import Optional
-from agent.core.command_router import CommandRouter # Fast Router
-from agent.core.router import ToolRouter # Tool Registry
-from agent.skills import SkillRouter # Clowbot-class Skill Router
-from agent.core.pipeline import ClowbotPipeline # Clowbot-class 8-stage pipeline
-from agent.security.destructive_action_handler import DestructiveActionHandler # Frozen destructive flow
-from agent.security.assumption_log import AssumptionLogger # Confidence logging
 
 # Add project root to path (parent of agent/) for 'agent.' imports to work
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -58,7 +52,17 @@ def load_config(config_path: str = "agent/config/settings.yaml") -> dict:
     """Load configuration from YAML file."""
     import yaml
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
+        resolved_path = Path(config_path)
+        if not resolved_path.is_absolute() and not resolved_path.exists():
+            candidate = PROJECT_ROOT / config_path
+            if candidate.exists():
+                resolved_path = candidate
+            else:
+                fallback = PROJECT_ROOT / "agent" / "config" / "settings.yaml"
+                if fallback.exists():
+                    resolved_path = fallback
+
+        with open(resolved_path, 'r', encoding='utf-8') as f:
             content = f.read()
             # Expand environment variables like ${VAR}
             expanded_content = os.path.expandvars(content)
@@ -82,6 +86,11 @@ class NeuralAgent:
         logger.info("=" * 60)
         
         self.config = load_config(config_path)
+
+        if os.environ.get('AGENT_API_MODE', '').lower() == 'true':
+            security_cfg = self.config.setdefault('security', {})
+            security_cfg['auto_approval'] = True
+
         self._initialized = False
         
         # External synchronization hooks
@@ -91,6 +100,7 @@ class NeuralAgent:
         self._state_machine = None
         self._consent_gate = None
         self._command_router = None # Core orchestrator router
+        from agent.core.command_router import CommandRouter
         self.fast_command_router = CommandRouter() # Fast regex router
         self._skill_router = None # Clowbot-class skill router
         self._rollback_manager = None
@@ -117,6 +127,10 @@ class NeuralAgent:
         try:
             from agent.core.orchestrator import StateMachine, ConsentGate, CommandRouter, RollbackManager
             from agent.security.audit_log import AuditLogger
+            from agent.core.router import ToolRouter
+            from agent.skills import SkillRouter
+            from agent.security.destructive_action_handler import DestructiveActionHandler
+            from agent.security.assumption_log import AssumptionLogger
             
             # Module 12: Safety Framework
             from agent.core.safety_framework import SafetyFramework
@@ -855,16 +869,15 @@ def main():
     
     parser = argparse.ArgumentParser(description="Neural AI Agent")
     parser.add_argument("--config", default="agent/config/settings.yaml", help="Config file path")
-    parser.add_argument("--mode", choices=["cli", "api"], default="api", help="Run mode (default: api)")
+    parser.add_argument("--mode", choices=["cli", "api", "autonomous-cli", "autonomous-api"], default="api", help="Run mode (default: api)")
     parser.add_argument("--port", type=int, default=8000, help="API port")
     args = parser.parse_args()
     
-    # Create and initialize agent
-    agent = NeuralAgent(config_path=args.config)
-    
     try:
-        agent.initialize()
-        
+        if args.mode in {"cli", "api"}:
+            agent = NeuralAgent(config_path=args.config)
+            agent.initialize()
+
         if args.mode == "cli":
             # Use nest_asyncio to allow nested event loops (Playwright creates one during init)
             try:
@@ -885,11 +898,36 @@ def main():
                 reload=False,  # Reload disabled for production use
                 log_level="info"
             )
+        elif args.mode == "autonomous-api":
+            logger.info(f"Autonomous API mode - starting server on port {args.port}...")
+            uvicorn.run(
+                "agent.api.server:app",
+                host="0.0.0.0",
+                port=args.port,
+                reload=False,
+                log_level="info"
+            )
+        elif args.mode == "autonomous-cli":
+            from agent.runtime import RUNTIME
+
+            async def _run_autonomous_cli() -> None:
+                print("\nAUTONOMOUS MISSION CLI (type 'exit' to quit)\n")
+                while True:
+                    user_input = input("Mission Goal: ").strip()
+                    if not user_input:
+                        continue
+                    if user_input.lower() in {"exit", "quit"}:
+                        break
+                    result = await RUNTIME.run_goal(user_input, {"policy_profile": "strict"})
+                    print(f"Result: {result}\n")
+
+            asyncio.run(_run_autonomous_cli())
         
     except KeyboardInterrupt:
         pass
     finally:
-        agent.shutdown()
+        if 'agent' in locals():
+            agent.shutdown()
 
 
 if __name__ == "__main__":

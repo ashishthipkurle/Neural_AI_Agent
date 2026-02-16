@@ -21,15 +21,43 @@ interface TerminalPanelProps {
     isOpen: boolean;
     onToggle: () => void;
     cwd?: string;
+    hideHeader?: boolean;
 }
 
 const DEFAULT_CWD = "D:\\All Projects\\My AI Agent\\generated";
 
-export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelProps) {
+export default function TerminalPanel({ isOpen, onToggle, cwd, hideHeader = false }: TerminalPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [tabs, setTabs] = useState<TerminalTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
+    const [restoreAttempted, setRestoreAttempted] = useState(false);
     const termInstances = useRef<Map<string, { term: XTerm; fit: FitAddon; cleanup: () => void }>>(new Map());
+
+    /* =========================== CREATE TAB ============================ */
+
+    const createTab = useCallback((shell: ShellType = "powershell") => {
+        const id = crypto.randomUUID();
+        // Use provided cwd or fallback to default
+        const effectiveCwd = cwd || DEFAULT_CWD;
+
+        const newTab: TerminalTab = {
+            id,
+            name: shell === "powershell" ? "PowerShell" : "CMD",
+            shell,
+            cwd: effectiveCwd,
+            aiWritable: true,
+        };
+
+        setTabs((prev) => [...prev, newTab]);
+        setActiveTabId(id);
+
+        // Create PTY session
+        api.terminal.create({
+            id,
+            cwd: effectiveCwd,
+            shell,
+        });
+    }, [cwd]);
 
     useEffect(() => {
         console.log("DEBUG: TerminalPanel mounted. API:", api);
@@ -60,7 +88,21 @@ export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelPr
                 console.error("Failed to restore terminal sessions:", e);
             }
         }
+
+        setRestoreAttempted(true);
     }, []);
+
+    // If opened and no restored tabs exist, create a default PowerShell tab so the terminal is usable.
+    useEffect(() => {
+        if (!isOpen) return;
+        if (!restoreAttempted) return;
+        if (tabs.length > 0) return;
+
+        // Avoid auto-creating if the API isn't available.
+        if (!api?.terminal) return;
+
+        createTab("powershell");
+    }, [isOpen, restoreAttempted, tabs.length, createTab]);
 
     // Save tabs to localStorage whenever they change
     useEffect(() => {
@@ -69,32 +111,6 @@ export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelPr
         }));
         localStorage.setItem("terminal-tabs", JSON.stringify(tabData));
     }, [tabs]);
-
-    /* =========================== CREATE TAB ============================ */
-
-    const createTab = useCallback((shell: ShellType = "powershell") => {
-        const id = crypto.randomUUID();
-        // Use provided cwd or fallback to default
-        const effectiveCwd = cwd || DEFAULT_CWD;
-
-        const newTab: TerminalTab = {
-            id,
-            name: shell === "powershell" ? "PowerShell" : "CMD",
-            shell,
-            cwd: effectiveCwd,
-            aiWritable: true,
-        };
-
-        setTabs((prev) => [...prev, newTab]);
-        setActiveTabId(id);
-
-        // Create PTY session
-        api.terminal.create({
-            id,
-            cwd: effectiveCwd,
-            shell,
-        });
-    }, [cwd]);
 
     /* ============================ CLOSE TAB ============================ */
 
@@ -160,18 +176,18 @@ export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelPr
             cursorBlink: true,
             cursorStyle: "block",
             theme: {
-                background: "#0a0f1a",
-                foreground: "#e0e0e0",
-                cursor: "#00c8d4",
-                cursorAccent: "#0a0f1a",
-                black: "#0a0f1a",
-                red: "#ff5555",
-                green: "#50fa7b",
-                yellow: "#f1fa8c",
-                blue: "#6272a4",
-                magenta: "#ff79c6",
-                cyan: "#00c8d4",
-                white: "#f8f8f2",
+                background: "#08080a",
+                foreground: "#d1d5db",
+                cursor: "#d1d5db",
+                cursorAccent: "#08080a",
+                black: "#08080a",
+                red: "#ef4444",
+                green: "#22c55e",
+                yellow: "#eab308",
+                blue: "#60a5fa",
+                magenta: "#a78bfa",
+                cyan: "#22d3ee",
+                white: "#f3f4f6",
             },
         });
 
@@ -179,6 +195,7 @@ export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelPr
         term.loadAddon(fit);
         term.open(containerRef.current);
         fit.fit();
+        term.focus();
 
         // Subscribe to PTY data
 
@@ -219,9 +236,16 @@ export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelPr
         window.addEventListener("resize", handleResize);
         handleResize();
 
+        const observer = new ResizeObserver(() => {
+            handleResize();
+        });
+
+        if (containerRef.current) observer.observe(containerRef.current);
+
         // Store instance
         const cleanup = () => {
             window.removeEventListener("resize", handleResize);
+            observer.disconnect();
             cleanupData();
             cleanupExit();
         };
@@ -230,6 +254,7 @@ export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelPr
 
         return () => {
             window.removeEventListener("resize", handleResize);
+            observer.disconnect();
         };
     }, [activeTabId, isOpen, tabs]);
 
@@ -239,100 +264,102 @@ export default function TerminalPanel({ isOpen, onToggle, cwd }: TerminalPanelPr
         return (
             <div
                 onClick={onToggle}
-                className="h-8 bg-[#0a0f1a] border-t border-cyan-500/20 flex items-center px-3 cursor-pointer hover:bg-[#0c1624] transition-colors"
+                className="h-8 bg-[#08080a] border-t border-gray-800 flex items-center px-3 cursor-pointer hover:bg-white/5 transition-colors"
             >
-                <TerminalIcon size={14} className="text-cyan-500 mr-2" />
-                <span className="text-xs text-cyan-500 font-medium">Terminal</span>
-                <span className="ml-2 text-xs text-cyan-500/50">({tabs.length} tabs)</span>
-                <ChevronUp className="ml-auto text-cyan-500" size={14} />
+                <TerminalIcon size={14} className="text-gray-300 mr-2" />
+                <span className="text-xs text-gray-300 font-medium">Terminal</span>
+                <span className="ml-2 text-xs text-gray-500">({tabs.length} tabs)</span>
+                <ChevronUp className="ml-auto text-gray-300" size={14} />
             </div>
         );
     }
 
     return (
-        <div className="flex flex-col bg-[#0a0f1a] border-t border-cyan-500/20">
+        <div className={`flex flex-col h-full ${hideHeader ? 'bg-transparent' : 'bg-[#08080a] border-t border-gray-800'}`}>
             {/* Tab Bar */}
-            <div className="h-8 bg-[#0c1624] flex items-center px-2 border-b border-cyan-500/10 overflow-x-auto">
-                {tabs.map((tab) => (
-                    <div
-                        key={tab.id}
-                        className={`flex items-center gap-1.5 px-2 py-1 mr-1 rounded text-xs cursor-pointer group ${activeTabId === tab.id
-                            ? "bg-cyan-500/20 text-cyan-400"
-                            : "text-white/60 hover:bg-white/5"
-                            }`}
-                        onClick={() => setActiveTabId(tab.id)}
-                    >
-                        <TerminalIcon size={12} />
-                        <span>{tab.name}</span>
-                        {/* AI Permission Indicator */}
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                toggleAiPermission(tab.id);
-                            }}
-                            className="ml-1 opacity-60 hover:opacity-100"
-                            title={tab.aiWritable ? "AI can type (click to lock)" : "AI locked (click to unlock)"}
+            {!hideHeader && (
+                <div className="h-8 bg-[#0a0a0c] flex items-center px-2 border-b border-gray-800/60 overflow-x-auto shrink-0">
+                    {tabs.map((tab) => (
+                        <div
+                            key={tab.id}
+                            className={`flex items-center gap-1.5 px-2 py-1 mr-1 rounded text-xs cursor-pointer group ${activeTabId === tab.id
+                                ? "bg-white/5 text-gray-200"
+                                : "text-gray-500 hover:bg-white/5 hover:text-gray-200"
+                                }`}
+                            onClick={() => setActiveTabId(tab.id)}
                         >
-                            {tab.aiWritable ? (
-                                <Unlock size={10} className="text-green-400" />
-                            ) : (
-                                <Lock size={10} className="text-red-400" />
-                            )}
+                            <TerminalIcon size={12} />
+                            <span>{tab.name}</span>
+                            {/* AI Permission Indicator */}
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleAiPermission(tab.id);
+                                }}
+                                className="ml-1 opacity-60 hover:opacity-100"
+                                title={tab.aiWritable ? "AI can type (click to lock)" : "AI locked (click to unlock)"}
+                            >
+                                {tab.aiWritable ? (
+                                    <Unlock size={10} className="text-green-400" />
+                                ) : (
+                                    <Lock size={10} className="text-red-400" />
+                                )}
+                            </button>
+                            {/* Close Button */}
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    closeTab(tab.id);
+                                }}
+                                className="ml-1 opacity-0 group-hover:opacity-60 hover:opacity-100"
+                            >
+                                <X size={12} />
+                            </button>
+                        </div>
+                    ))}
+
+                    {/* New Tab Buttons */}
+                    <div className="ml-auto flex items-center gap-1">
+                        <button
+                            onClick={() => createTab("powershell")}
+                            className="p-1 rounded hover:bg-white/5 text-gray-300"
+                            title="New PowerShell"
+                        >
+                            <Plus size={14} />
                         </button>
-                        {/* Close Button */}
                         <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                closeTab(tab.id);
-                            }}
-                            className="ml-1 opacity-0 group-hover:opacity-60 hover:opacity-100"
+                            onClick={() => createTab("cmd")}
+                            className="px-2 py-0.5 rounded hover:bg-white/5 text-gray-300 text-[10px]"
+                            title="New CMD"
                         >
-                            <X size={12} />
+                            CMD
+                        </button>
+                        <button
+                            onClick={onToggle}
+                            className="ml-2 text-white/60 hover:text-white"
+                        >
+                            <ChevronDown size={14} />
                         </button>
                     </div>
-                ))}
-
-                {/* New Tab Buttons */}
-                <div className="ml-auto flex items-center gap-1">
-                    <button
-                        onClick={() => createTab("powershell")}
-                        className="p-1 rounded hover:bg-cyan-500/20 text-cyan-400"
-                        title="New PowerShell"
-                    >
-                        <Plus size={14} />
-                    </button>
-                    <button
-                        onClick={() => createTab("cmd")}
-                        className="px-2 py-0.5 rounded hover:bg-cyan-500/20 text-cyan-400 text-[10px]"
-                        title="New CMD"
-                    >
-                        CMD
-                    </button>
-                    <button
-                        onClick={onToggle}
-                        className="ml-2 text-white/60 hover:text-white"
-                    >
-                        <ChevronDown size={14} />
-                    </button>
                 </div>
-            </div>
+            )}
 
             {/* Terminal Container */}
             {tabs.length === 0 ? (
-                <div className="h-64 flex items-center justify-center text-cyan-500/50">
+                <div className={`flex-1 min-h-0 flex items-center justify-center text-gray-500 ${hideHeader ? '' : ''}`}>
                     <div className="text-center">
-                        <TerminalIcon size={32} className="mx-auto mb-2 opacity-50" />
+                        <TerminalIcon size={32} className="mx-auto mb-2 opacity-40" />
                         <p className="text-sm">No terminals open</p>
                         <button
                             onClick={() => createTab("powershell")}
-                            className="mt-2 px-3 py-1 bg-cyan-500/20 rounded text-cyan-400 text-sm hover:bg-cyan-500/30"
+                            className="mt-2 px-3 py-1 bg-white/5 rounded text-gray-200 text-sm hover:bg-white/10"
                         >
                             New Terminal
                         </button>
                     </div>
                 </div>
             ) : (
-                <div ref={containerRef} className="h-64 w-full" />
+                <div ref={containerRef} className="flex-1 min-h-0 w-full" />
             )}
         </div>
     );

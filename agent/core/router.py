@@ -40,6 +40,7 @@ class ToolRouter:
         # OS Tools
         self.register_tool("read_file", self.os_tools.read_file)
         self.register_tool("write_file", self.os_tools.write_file)
+        self.register_tool("delete_path", self.os_tools.delete_path)
         self.register_tool("launch_app", self.os_tools.launch_app)
         
         # Math Tools

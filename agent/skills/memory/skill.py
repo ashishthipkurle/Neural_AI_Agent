@@ -13,6 +13,7 @@ Uses existing memory infrastructure from agent/memory/
 import os
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -258,10 +259,19 @@ class MemorySkill(BaseSkill):
         # Fallback to simple text search
         if not results:
             query_lower = query.lower()
+            query_tokens = {
+                token for token in re.findall(r"[a-zA-Z0-9]+", query_lower)
+                if len(token) > 2 and token not in {"what", "which", "when", "where", "who", "whom", "why", "how", "my", "the", "and", "for", "with", "that", "this", "name"}
+            }
             for mem in self._memories:
-                if query_lower in mem["content"].lower():
+                content_lower = mem["content"].lower()
+                content_tokens = set(re.findall(r"[a-zA-Z0-9]+", content_lower))
+
+                if query_lower in content_lower:
                     results.append(mem)
                 elif any(query_lower in tag.lower() for tag in mem.get("tags", [])):
+                    results.append(mem)
+                elif query_tokens and query_tokens.intersection(content_tokens):
                     results.append(mem)
             
             results = results[:limit]
@@ -269,11 +279,30 @@ class MemorySkill(BaseSkill):
         # Filter by category if specified
         if category:
             results = [r for r in results if r.get("category") == category]
+
+        if not results:
+            return SkillResult(
+                success=True,
+                data={"memories": [], "count": 0},
+                message="I couldn't find anything in memory for that."
+            )
+
+        snippets = []
+        for mem in results[:3]:
+            content = (mem.get("content") or "").strip()
+            if content:
+                snippets.append(content)
+
+        if len(snippets) == 1:
+            recall_message = f"I remember: {snippets[0]}"
+        else:
+            joined = "\n- " + "\n- ".join(snippets)
+            recall_message = f"I found {len(results)} matching memories:{joined}"
         
         return SkillResult(
             success=True,
             data={"memories": results, "count": len(results)},
-            message=f"Found {len(results)} matching memories"
+            message=recall_message
         )
     
     def _action_forget(self, params: Dict, context: Dict) -> SkillResult:

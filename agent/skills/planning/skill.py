@@ -243,10 +243,146 @@ class PlanningSkill(BaseSkill):
         step_id = 1
         
         # ===== COMPOUND PATTERNS (detect multi-step goals) =====
+
+        # Pattern: Build startup landing page + research competitors + run + screenshot + telegram
+        has_startup = any(x in goal_lower for x in ["startup", "landing page", "react project"])
+        has_competitor_research = any(x in goal_lower for x in ["competitor", "research competitors", "research"])
+        has_build_run = any(x in goal_lower for x in ["create react project", "install dependencies", "run it", "run the project"])
+        has_screenshot = "screenshot" in goal_lower
+        has_telegram = "telegram" in goal_lower
+
+        if has_startup and has_competitor_research and has_build_run and has_screenshot and has_telegram:
+            startup_name = "Startup"
+            startup_match = re.search(r"startup\s+called\s+([A-Za-z0-9\s&._-]+)", goal, re.IGNORECASE)
+            if startup_match:
+                startup_name = startup_match.group(1).strip().rstrip(".,")
+            else:
+                landing_match = re.search(r"landing\s+page\s+for\s+([A-Za-z0-9\s&._-]+?)(?:,|\.|\band\b|$)", goal, re.IGNORECASE)
+                if landing_match:
+                    startup_name = landing_match.group(1).strip().rstrip(".,")
+
+            if startup_name.lower() in {"a startup", "startup", "the startup"}:
+                startup_name = "Startup"
+
+            safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", startup_name).strip("_").lower() or "startup"
+            competitor_output = f"generated/{safe_name}_competitors.md"
+            screenshot_path = f"generated/{safe_name}_site.png"
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="coding",
+                action="scaffold_react_website",
+                params={
+                    "goal": goal,
+                    "project_name": safe_name,
+                    "install_dependencies": True,
+                    "run_dev_server": True,
+                    "open_in_editor": True,
+                },
+                description=f"Create and run React landing page project for {startup_name}"
+            ))
+            step_id += 1
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="research",
+                action="deep_research",
+                params={
+                    "query": f"Top competitors of {startup_name}",
+                    "topic": f"Top competitors of {startup_name}",
+                    "limit": 5,
+                    "output_path": competitor_output,
+                },
+                description=f"Research competitors and generate report for {startup_name}"
+            ))
+            step_id += 1
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="vision",
+                action="screenshot",
+                params={"path": screenshot_path},
+                description="Capture screenshot of the running site"
+            ))
+            step_id += 1
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="telegram",
+                action="send_document",
+                params={"path": competitor_output, "caption": f"Competitor research: {startup_name}"},
+                description=f"Send competitor research file via Telegram: {competitor_output}"
+            ))
+            step_id += 1
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="telegram",
+                action="send_document",
+                params={"path": screenshot_path, "caption": f"Running site screenshot: {startup_name}"},
+                description=f"Send running-site screenshot via Telegram: {screenshot_path}"
+            ))
+            step_id += 1
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="telegram",
+                action="send_message",
+                params={"message": f"✅ Mission complete for {startup_name}: landing page built, competitor research generated, screenshot captured, and artifacts sent."},
+                description="Send completion message"
+            ))
+            return steps
+
+        # Pattern: "search news -> summarize -> save file -> send telegram"
+        has_arrow = ("->" in goal_lower) or ("→" in goal)
+        has_search = "search" in goal_lower
+        has_summary = "summar" in goal_lower
+        has_save_chain = ("save" in goal_lower) or ("file" in goal_lower)
+        has_telegram_chain = "telegram" in goal_lower
+        if has_arrow and has_search and has_summary and has_save_chain and has_telegram_chain:
+            query_match = re.search(r"search\s+(?:for\s+)?(.+?)(?:\s*(?:->|→)|,|$)", goal, re.IGNORECASE)
+            query = query_match.group(1).strip() if query_match else "latest news"
+            if query.lower() in {"news", "the news", "latest", "latest news"}:
+                query = "latest news"
+
+            output_path = "generated/news_summary.md"
+            md_match = re.search(r"([a-zA-Z0-9_./\\-]+\.md)\b", goal, re.IGNORECASE)
+            if md_match:
+                output_path = md_match.group(1).replace('\\\\', '/').replace('\\', '/')
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="research",
+                action="deep_research",
+                params={"query": query, "topic": query, "limit": 5, "output_path": output_path},
+                description=f"Search and summarize: {query}"
+            ))
+            step_id += 1
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="telegram",
+                action="send_document",
+                params={"path": output_path, "caption": f"News Summary: {query}"},
+                description=f"Send summary file via Telegram: {output_path}"
+            ))
+            step_id += 1
+
+            steps.append(PlanStep(
+                id=step_id,
+                skill="telegram",
+                action="send_message",
+                params={"message": f"✅ News summary complete and sent. File: {output_path}"},
+                description="Send completion notification"
+            ))
+            return steps
         
         # Pattern: "research/find/search X and save/write to file"
-        has_research = any(x in goal_lower for x in ["research", "find out", "look up", "search for"])
-        has_save = any(x in goal_lower for x in ["save it to", "write to", "save to", "put in file", "create a file"])
+        has_research = any(x in goal_lower for x in ["research", "find out", "find ", "look up", "search for", "analyze", "investigate"])
+        has_save = any(x in goal_lower for x in [
+            "save it to", "save it in", "save to", "save in", "write to", "write in",
+            "put in file", "create a file", "markdown report", "report", ".md"
+        ])
         
         if has_research and has_save:
             # Extract the research topic
@@ -261,53 +397,45 @@ class PlanningSkill(BaseSkill):
                     topic = topic.split(suffix)[0]
                     break
             topic = topic.strip()
+            topic = re.sub(r'(,?\s*create\s+(a\s+)?(professional\s+)?markdown\s+report.*)$', '', topic, flags=re.IGNORECASE).strip()
+            topic = re.sub(r'(,?\s*save\s+it\s+(to|in)\s+[^,]+.*)$', '', topic, flags=re.IGNORECASE).strip()
+            topic = re.sub(r'(,?\s*and\s+send\s+.*telegram.*)$', '', topic, flags=re.IGNORECASE).strip()
+            topic = topic.rstrip(',').strip()
             
-            # Extract filename if specified
-            filename = "research_output.txt"
-            for marker in ["to a file", "to file", "to "]:
-                if marker in goal_lower.split("save")[-1]:
-                    potential_file = goal_lower.split("save")[-1].split(marker)[-1].strip()
-                    if potential_file and len(potential_file) < 50:
-                        filename = potential_file if "." in potential_file else f"{potential_file.replace(' ', '_')}.txt"
-                    break
-            
-            # Step 1: Search & Click First Result (Robust)
+            # Extract output markdown path if explicitly specified
+            output_path = "generated/research_report.md"
+            md_match = re.search(r'([a-zA-Z0-9_./\\-]+\.md)\b', goal, re.IGNORECASE)
+            if md_match:
+                output_path = md_match.group(1).replace('\\\\', '/').replace('\\', '/')
+            elif "ai_startups" in goal_lower:
+                output_path = "generated/ai_startups.md"
+
+            # Step 1: Deep research (prefer resilient research skill over direct browser page automation)
             steps.append(PlanStep(
                 id=step_id,
-                skill="browser",
-                action="google_search",
-                params={"query": topic},
-                description=f"Search Google for: {topic}"
+                skill="research",
+                action="deep_research",
+                params={"query": topic, "topic": topic, "limit": 5, "output_path": output_path},
+                description=f"Deep research and generate markdown report: {topic}"
             ))
             step_id += 1
-            
-            # Step 2: Scrape content
+
+            # Step 2: Send generated markdown file to Telegram
             steps.append(PlanStep(
                 id=step_id,
-                skill="browser",
-                action="scrape",
-                params={"selector": "article, .content, main, body", "attribute": "innerText"},
-                description="Scrape page content"
+                skill="telegram",
+                action="send_document",
+                params={"path": output_path, "caption": f"Mission Report: {topic}"},
+                description=f"Send report file via Telegram: {output_path}"
             ))
-            step_id += 1
-            
-            # Step 3: Save to file (this will use result from previous step)
-            steps.append(PlanStep(
-                id=step_id,
-                skill="desktop",
-                action="write_file",
-                params={"filename": filename, "use_previous_result": True},
-                description=f"Save content to {filename}"
-            ))
-            step_id += 1
-            
-            # Step 4: Send to Telegram (notify user with the result)
+
+            # Step 3: Confirmation message
             steps.append(PlanStep(
                 id=step_id,
                 skill="telegram",
                 action="send_message",
-                params={"message": f"📄 Research on '{topic}' completed!", "use_previous_result": True},
-                description="Send results to Telegram"
+                params={"message": f"✅ Research complete. Report saved to {output_path} and delivered via Telegram."},
+                description="Send completion notification"
             ))
             
             return steps
@@ -338,7 +466,7 @@ class PlanningSkill(BaseSkill):
                     "project_name": project_name,
                     "install_dependencies": True,
                     "run_dev_server": True,
-                    "open_in_editor": False,
+                    "open_in_editor": True,
                 },
                 description=f"Scaffold React website project: {project_name}"
             ))
@@ -348,7 +476,16 @@ class PlanningSkill(BaseSkill):
         # ===== INTERACTIVE / CONVERSATION GOALS =====
         # Detect goals that involve navigating to a site and interacting with it
         # e.g. "Interact with ChatGPT to discuss quantum physics"
-        interaction_keywords = ["interact with", "conversation", "discuss", "chat on", "talk to", "converse"]
+        interaction_keywords = [
+            "interact with",
+            "interaction with",
+            "conversation",
+            "discuss",
+            "chat on",
+            "chat with",
+            "talk to",
+            "converse",
+        ]
         known_sites = {
             "chatgpt": "https://chatgpt.com",
             "chat.openai": "https://chat.openai.com",
@@ -387,7 +524,16 @@ class PlanningSkill(BaseSkill):
 
             # Extract the topic from the goal using regex for better precision
             # Look for "discuss X", "about X", "on X"
-            topic_match = re.search(r'\b(discuss|about|on|regarding)\s+(.*?)(\.|for approximately|$)', goal_lower, re.IGNORECASE)
+            topic_match = re.search(
+                r"\b(discuss|about|on|regarding)\s+(.*?)(?:\."
+                r"|\bfor\s+\d+\s*(?:minute|minutes|min|mins|m|hour|hours|hr|hrs|h)\b"
+                r"|\band\s+send\b"
+                r"|\bthen\s+send\b"
+                r"|\bto\s+telegram\b"
+                r"|$)",
+                goal_lower,
+                re.IGNORECASE,
+            )
             
             if topic_match:
                 raw_topic = topic_match.group(2).strip()

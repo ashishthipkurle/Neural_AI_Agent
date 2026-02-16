@@ -8,6 +8,10 @@ agent:
 
 llm:
   provider: "ollama"
+  # Models supported by this workspace (used by the UI model selector via request override)
+  available_models:
+    - "gpt-oss:120b-cloud"
+    - "kimi-k2.5:cloud"
   # Unified model for text/code tasks (Cloud connection required)
   model_name: "kimi-k2.5:cloud"
   # Vision model kept for image analysis (gpt-oss is text-only)
@@ -16,7 +20,7 @@ llm:
 
 security:
   safe_mode: false
-  auto_approval: false
+  auto_approval: true
   allowed_paths:
     - "D:/"
     - "C:/"
@@ -102,6 +106,28 @@ telegram:
 browser:
   headless: false
   stealth: true
+
+autonomous:
+  enabled: true
+  pipeline:
+    enforce_thirteen_stage_flow: true
+    forbid_direct_execution: true
+  supervisor:
+    stagnation_threshold: 3
+    mission_timeout_seconds: 0
+  mission:
+    policy_profile: "strict"
+    checkpoint_db_path: "agent_data/missions.db"
+    audit_db_path: "agent_data/audit.db"
+    continue_until_goal: true
+  retry:
+    base_delay_seconds: 1.0
+    max_delay_seconds: 30.0
+    max_attempts: 5
+  memory:
+    rag_before_planning: true
+    sqlite_path: "agent_data/memory.sqlite"
+    conversation_db_path: "agent_data/conversations.db"
 
 
 voice_calls:

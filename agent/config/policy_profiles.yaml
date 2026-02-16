@@ -1,0 +1,25 @@
+profiles:
+  strict:
+    require_consent_medium: true
+    require_consent_high: true
+    require_consent_critical: true
+    allow_destructive_without_override: false
+    max_retry_attempts: 5
+    fallback_models:
+      - kimi-k2.5:cloud
+  balanced:
+    require_consent_medium: false
+    require_consent_high: true
+    require_consent_critical: true
+    allow_destructive_without_override: false
+    max_retry_attempts: 4
+    fallback_models:
+      - kimi-k2.5:cloud
+  permissive:
+    require_consent_medium: false
+    require_consent_high: false
+    require_consent_critical: true
+    allow_destructive_without_override: false
+    max_retry_attempts: 3
+    fallback_models:
+      - kimi-k2.5:cloud

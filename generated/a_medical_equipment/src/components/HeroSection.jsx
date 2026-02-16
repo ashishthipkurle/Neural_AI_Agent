@@ -5,11 +5,10 @@ export default function HeroSection({ businessTitle }) {
     <section id="home" className="hero-section">
       <div className="site-container hero-grid">
         <div>
-          <p className="eyebrow">Medical Equipment Partner</p>
+          <p className="eyebrow">Healthcare Solutions Partner</p>
           <h1>{businessTitle}</h1>
           <p>
-            Professional-grade devices for hospitals, clinics, and home care providers.
-            Fast delivery, verified quality, and responsive technical support.
+            Professional-grade devices and services for hospitals, clinics, and care providers. A Medical Equipment delivers quality you can trust.
           </p>
           <div className="hero-actions">
             <a href="#products" className="btn btn-primary">Browse Products</a>
@@ -19,9 +18,9 @@ export default function HeroSection({ businessTitle }) {
         <div className="hero-card">
           <h3>Why teams choose us</h3>
           <ul>
-            <li>Certified product sourcing</li>
-            <li>On-time delivery across regions</li>
-            <li>Post-sales support and guidance</li>
+            <li>Production-ready from day one</li>
+            <li>Responsive support and documentation</li>
+            <li>Trusted by leading organizations</li>
           </ul>
         </div>
       </div>

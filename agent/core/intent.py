@@ -38,6 +38,169 @@ class IntentParser:
         """Inject learning manager."""
         self.learning_manager = manager
 
+    def _normalize_tokens(self, text: str) -> List[str]:
+        tokens = re.findall(r"[a-zA-Z0-9_./-]+", text.lower())
+        return [t.strip() for t in tokens if t.strip()]
+
+    def _contains_any_stem(self, text: str, stems: List[str]) -> bool:
+        tokens = self._normalize_tokens(text)
+        for token in tokens:
+            for stem in stems:
+                if token.startswith(stem):
+                    return True
+        return False
+
+    def _extract_semantic_hints(self, user_input: str) -> Dict[str, Any]:
+        lower = user_input.lower()
+
+        goal_stems = ["research", "investigat", "analy", "find", "compar", "study", "explor"]
+        report_stems = ["report", "markdown", "document", "summary", "write", "save", "file", "create"]
+        deliver_stems = ["send", "share", "deliver", "forward", "telegram"]
+
+        is_research_goal = self._contains_any_stem(lower, goal_stems)
+        has_report_request = self._contains_any_stem(lower, report_stems)
+        has_delivery_request = self._contains_any_stem(lower, deliver_stems)
+
+        md_match = re.search(r"([a-zA-Z0-9_./\\-]+\.md)\b", user_input, re.IGNORECASE)
+        output_path = md_match.group(1).replace("\\\\", "/").replace("\\", "/") if md_match else None
+
+        channel = "telegram" if "telegram" in lower else None
+
+        return {
+            "is_research_goal": is_research_goal,
+            "has_report_request": has_report_request,
+            "has_delivery_request": has_delivery_request,
+            "output_path": output_path,
+            "channel": channel,
+        }
+
+    def _should_route_to_mission(self, user_input: str) -> bool:
+        hints = self._extract_semantic_hints(user_input)
+        if hints["is_research_goal"] and (hints["has_report_request"] or hints["has_delivery_request"]):
+            return True
+
+        lower = user_input.lower()
+        if any(k in lower for k in ["multi-step", "autonomous", "workflow", "end-to-end"]):
+            return True
+
+        return False
+
+    def _extract_ordered_web_workflow(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Extract structured workflow: go to X, search Y, open first N results, summarize."""
+        lower = user_input.lower()
+
+        if not ("go to" in lower and "search" in lower and "open first" in lower and "summar" in lower):
+            return None
+
+        site_match = re.search(r"(?:go to|navigate to)\s+([a-zA-Z0-9./:-]+)", user_input, re.IGNORECASE)
+        search_match = re.search(r"search\s+for\s+[\"']([^\"']+)[\"']", user_input, re.IGNORECASE)
+        if not search_match:
+            search_match = re.search(r"search\s+for\s+([^,.;]+)", user_input, re.IGNORECASE)
+        open_match = re.search(r"open\s+first\s+(\d+)", user_input, re.IGNORECASE)
+
+        target_site = site_match.group(1).strip() if site_match else "google.com"
+        query = search_match.group(1).strip() if search_match else ""
+        result_count = int(open_match.group(1)) if open_match else 3
+        result_count = max(1, min(result_count, 10))
+
+        if not query:
+            return None
+
+        return {
+            "site": target_site,
+            "query": query,
+            "result_count": result_count,
+        }
+
+    def _extract_news_summary_workflow(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Extract shorthand workflow: search news -> summarize -> save file -> send telegram."""
+        lower = user_input.lower()
+        has_arrow = ("->" in lower) or ("→" in user_input)
+        has_search = "search" in lower
+        has_summary = "summar" in lower
+        has_save = ("save" in lower) or ("file" in lower)
+        has_telegram = "telegram" in lower
+
+        if not (has_arrow and has_search and has_summary and has_save and has_telegram):
+            return None
+
+        query_match = re.search(r"search\s+(?:for\s+)?(.+?)(?:\s*(?:->|→)|,|$)", user_input, re.IGNORECASE)
+        query = query_match.group(1).strip() if query_match else "latest news"
+
+        if query.lower() in {"news", "the news", "latest", "latest news"}:
+            query = "latest news"
+
+        output_path = "generated/news_summary.md"
+        md_match = re.search(r"([a-zA-Z0-9_./\\-]+\.md)\b", user_input, re.IGNORECASE)
+        if md_match:
+            output_path = md_match.group(1).replace('\\\\', '/').replace('\\', '/')
+
+        return {
+            "query": query,
+            "output_path": output_path,
+        }
+
+    def _extract_startup_build_workflow(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Extract compound workflow: build landing page + research competitors + run + screenshot + telegram."""
+        lower = user_input.lower()
+
+        has_build = any(k in lower for k in ["build", "create react", "landing page", "react project"])
+        has_research = any(k in lower for k in ["research competitors", "research", "competitor"])
+        has_run = any(k in lower for k in ["run it", "run the project", "install dependencies"])
+        has_screenshot = "screenshot" in lower
+        has_telegram = "telegram" in lower
+
+        if not (has_build and has_research and has_run and has_screenshot and has_telegram):
+            return None
+
+        startup_name = "startup"
+        name_match = re.search(r"startup\s+called\s+([A-Za-z0-9\s&._-]+)", user_input, re.IGNORECASE)
+        if name_match:
+            startup_name = name_match.group(1).strip().rstrip(".,")
+        else:
+            landing_match = re.search(r"landing\s+page\s+for\s+([A-Za-z0-9\s&._-]+?)(?:,|\.|\band\b|$)", user_input, re.IGNORECASE)
+            if landing_match:
+                startup_name = landing_match.group(1).strip().rstrip(".,")
+
+        safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", startup_name).strip("_").lower() or "startup"
+
+        return {
+            "startup_name": startup_name,
+            "project_name": safe_name,
+            "competitor_output_path": f"generated/{safe_name}_competitors.md",
+            "screenshot_path": f"generated/{safe_name}_site.png",
+        }
+
+    def _extract_delete_target(self, user_input: str) -> Optional[str]:
+        quoted = re.search(r"[\"']([^\"']+)[\"']", user_input)
+        if quoted:
+            return quoted.group(1).strip()
+
+        keyword_match = re.search(
+            r"(?:folder|directory|dir|file)\s+(?:named\s+)?([a-zA-Z0-9_./\\:-]+)",
+            user_input,
+            re.IGNORECASE,
+        )
+        if keyword_match:
+            return keyword_match.group(1).strip()
+
+        return None
+
+    def _should_force_mission_for_chatgpt_report(self, user_input: str) -> bool:
+        """Detect multi-step workflows that shouldn't be reduced to a telegram_send_message.
+
+        Example: "go to chatgpt and chat ... then send the report on telegram".
+        """
+        lower = (user_input or "").lower()
+        has_chatgpt = any(k in lower for k in ["chatgpt", "chat.openai.com", "openai.com", "gpt"])  # broad but safe
+        has_navigation = any(k in lower for k in ["go to", "open", "navigate", "browse", "visit"])
+        has_report = any(k in lower for k in ["report", "summary", "summar", "write up", "notes"])
+        has_delivery = "telegram" in lower and any(k in lower for k in ["send", "share", "forward"])
+        has_interaction = any(k in lower for k in ["chat with", "talk to", "discuss", "conversation"])
+
+        # If it's explicitly a browser/chat interaction + report delivery, it's a mission.
+        return (has_chatgpt and has_delivery and has_report and (has_navigation or has_interaction))
+
     def _get_learned_examples(self, user_input: str) -> str:
         """Fetch relevant learned examples/patterns."""
         if not self.learning_manager:
@@ -85,11 +248,33 @@ class IntentParser:
                     reasoning="User provided chart image for analysis"
                 )]
 
+        # NUCLEAR OPTION: Compound startup build workflow
+        startup_workflow = self._extract_startup_build_workflow(user_input)
+        if startup_workflow:
+            mission_goal = (
+                f"Build a landing page for {startup_workflow['startup_name']}, research competitors, generate content, "
+                f"create React project, install dependencies, run it, take screenshot, and send all artifacts via Telegram."
+            )
+            return [Intent(
+                action="start_mission",
+                tool_name="start_mission",
+                parameters={
+                    "goal": mission_goal,
+                    "startup_build_workflow": startup_workflow,
+                },
+                confidence=1.0,
+                reasoning="Detected complex startup workflow with explicit multi-step build/research/run/screenshot/telegram requirements; routing to mission controller."
+            )]
+
         # NUCLEAR OPTION: Screen Analysis ("what's on my screen", "describe my screen")
         screen_keywords = ["what's on my screen", "whats on my screen", "describe my screen", 
                           "what do you see", "what is on screen", "read my screen", 
                           "analyze my screen", "look at my screen", "what is on my screen"]
-        if any(k in u_lower for k in screen_keywords):
+        screenshot_keywords = [
+            "take a screenshot", "capture screen", "capture my screen", "screenshot",
+            "currently open", "which app is open", "what application is currently open"
+        ]
+        if any(k in u_lower for k in screen_keywords) or any(k in u_lower for k in screenshot_keywords):
             # This needs to capture screenshot then analyze with vision LLM
             return [
                 Intent(
@@ -108,6 +293,43 @@ class IntentParser:
                 )
             ]
 
+        # NUCLEAR OPTION: Ordered browser workflow command
+        # Example: Go to google.com, search for "AI regulation India 2026", open first 3 results, summarize them.
+        ordered_workflow = self._extract_ordered_web_workflow(user_input)
+        if ordered_workflow:
+            mission_goal = (
+                f"Go to {ordered_workflow['site']}, search for '{ordered_workflow['query']}', "
+                f"open first {ordered_workflow['result_count']} results, summarize them."
+            )
+            return [Intent(
+                action="start_mission",
+                tool_name="start_mission",
+                parameters={
+                    "goal": mission_goal,
+                    "ordered_web_workflow": ordered_workflow,
+                },
+                confidence=1.0,
+                reasoning="Detected ordered multi-step browser workflow with explicit execution order; routing to mission controller."
+            )]
+
+        # NUCLEAR OPTION: Shorthand workflow chain (search -> summarize -> save -> telegram)
+        news_workflow = self._extract_news_summary_workflow(user_input)
+        if news_workflow:
+            mission_goal = (
+                f"Search for {news_workflow['query']}, summarize findings, "
+                f"save report to {news_workflow['output_path']}, and send it via Telegram."
+            )
+            return [Intent(
+                action="start_mission",
+                tool_name="start_mission",
+                parameters={
+                    "goal": mission_goal,
+                    "news_summary_workflow": news_workflow,
+                },
+                confidence=1.0,
+                reasoning="Detected shorthand news workflow with explicit execution chain; routing to mission controller."
+            )]
+
         # NUCLEAR OPTION: Force Search for Real-Time Info
         # This prevents the LLM from using stale 2023 knowledge for 2026 questions.
         search_triggers = ["current", "latest", "president", "prime minister", "ceo", "weather", "news", "price", "stock", "score", "who is the"]
@@ -119,6 +341,19 @@ class IntentParser:
                     parameters={"query": user_input},  # <-- CRITICAL: Pass the full question
                     confidence=1.0,
                     reasoning="Real-time information keyword detected."
+                )]
+
+        # NUCLEAR OPTION: File/Folder delete
+        delete_keywords = ["delete", "remove", "erase"]
+        if any(k in u_lower for k in delete_keywords) and any(x in u_lower for x in ["folder", "directory", "dir", "file", "path"]):
+            target_path = self._extract_delete_target(user_input)
+            if target_path:
+                return [Intent(
+                    action="delete_path",
+                    tool_name="delete_path",
+                    parameters={"path": target_path, "recursive": True},
+                    confidence=1.0,
+                    reasoning="User requested deletion of a file/folder path."
                 )]
 
         # NUCLEAR OPTION: Mission Mode
@@ -137,12 +372,54 @@ class IntentParser:
                 reasoning="User wants to start an autonomous mission."
             )]
 
+        # SEMANTIC ROUTING: Understand natural sentence intent beyond fixed syntax
+        if self._should_route_to_mission(user_input):
+            hints = self._extract_semantic_hints(user_input)
+            return [Intent(
+                action="start_mission",
+                tool_name="start_mission",
+                parameters={
+                    "goal": user_input.strip(),
+                    "semantic_hints": hints,
+                },
+                confidence=1.0,
+                reasoning="Semantic interpretation detected a complex objective with research/report/delivery requirements; routing to mission controller."
+            )]
+
+        # NUCLEAR OPTION: Auto Mission for research-report workflows
+        # Example: "Research top 5 AI startups..., create markdown report, save to generated/x.md, send via Telegram"
+        has_research_goal = any(k in u_lower for k in ["research", "deep research", "find out", "analyze", "investigate"])
+        has_report_goal = any(k in u_lower for k in ["report", "markdown", "save", "write", "file"])
+        has_delivery_goal = any(k in u_lower for k in ["telegram", "send the file", "send file", "send it"])
+        if has_research_goal and has_report_goal and has_delivery_goal:
+            return [Intent(
+                action="start_mission",
+                tool_name="start_mission",
+                parameters={"goal": user_input.strip()},
+                confidence=1.0,
+                reasoning="Detected research+report+delivery workflow; routing to mission controller to avoid coding/editor flow."
+            )]
+
+        # NUCLEAR OPTION: ChatGPT conversation + report to Telegram
+        # Example: "go to chatgpt and chat ... then send the report on telegram"
+        if self._should_force_mission_for_chatgpt_report(user_input):
+            return [Intent(
+                action="start_mission",
+                tool_name="start_mission",
+                parameters={"goal": user_input.strip()},
+                confidence=1.0,
+                reasoning="Detected multi-step ChatGPT interaction + report delivery; routing to mission controller."
+            )]
+
         # NUCLEAR OPTION: Telegram Commands
         if "telegram" in u_lower:
             # Skip if complex command (research/search) so LLM can handle the chain
             # e.g. "Do deep research on cars and send to telegram" should NOT be trapped here
             if any(k in u_lower for k in ["research", "analysis", "find", "deep", "scan", "monitor"]):
                  pass # Fall through to LLM for complex handling
+            # Skip if the user is describing a multi-step workflow (navigate/chat/report) and just wants delivery via Telegram.
+            elif self._should_force_mission_for_chatgpt_report(user_input) or any(k in u_lower for k in ["go to", "navigate", "browse", "open", "chatgpt", "chat with", "summar", "report"]):
+                pass
             
             # PRIORITY 1: Check for SEND first (user explicitly says "send X to Y")
             elif "send" in u_lower:
@@ -233,6 +510,7 @@ class IntentParser:
         AVAILABLE TOOLS:
         - chat_tool(message): General conversation.
         - launch_app(app_name, extra_args): Launch an application.
+        - delete_path(path, recursive): Delete a file or directory path.
         - store_memory(text): Save a fact/event to long-term memory.
         - search_memory(query): specific recall.
         - search_online(query): Search the web via API (Google/DDG) for quick info.

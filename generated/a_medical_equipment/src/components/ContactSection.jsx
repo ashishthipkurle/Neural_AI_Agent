@@ -5,10 +5,9 @@ export default function ContactSection() {
     <section id="contact" className="section section-soft">
       <div className="site-container section-grid">
         <div>
-          <h2>Contact Form</h2>
+          <h2>Get In Touch</h2>
           <p>
-            Tell us what equipment you need and our team will get back with options,
-            pricing, and delivery details.
+            Tell us what equipment you need and the A Medical Equipment team will respond with options.
           </p>
         </div>
         <form className="contact-form" onSubmit={(event) => event.preventDefault()}>

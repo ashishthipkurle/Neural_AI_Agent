@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import logging
 import json
@@ -117,6 +118,38 @@ class OSTools:
             return f"Successfully wrote to {path}"
         except Exception as e:
             return f"Error writing file: {e}"
+
+    def delete_path(self, path: str, recursive: bool = True) -> str:
+        """
+        Safely deletes a file or directory.
+        - Files are deleted directly.
+        - Directories require recursive=True to be removed.
+        """
+        if not self.permissions.is_path_allowed(path):
+            return f"Error: Access denied to {path}"
+
+        if not self.permissions.request_permission(f"Delete path at {path}"):
+            return "Action cancelled by user."
+
+        try:
+            normalized = os.path.normpath(path)
+
+            if not os.path.exists(normalized):
+                return f"Error: Path not found: {path}"
+
+            if os.path.isfile(normalized):
+                os.remove(normalized)
+                return f"Successfully deleted file: {path}"
+
+            if os.path.isdir(normalized):
+                if not recursive:
+                    return f"Error: Directory deletion requires recursive=True: {path}"
+                shutil.rmtree(normalized)
+                return f"Successfully deleted directory: {path}"
+
+            return f"Error: Unsupported path type: {path}"
+        except Exception as e:
+            return f"Error deleting path: {e}"
 
     def launch_app(self, app_name: str, extra_args: str = None) -> str:
         """
