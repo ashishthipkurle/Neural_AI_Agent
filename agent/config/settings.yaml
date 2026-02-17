@@ -13,9 +13,9 @@ llm:
     - "gpt-oss:120b-cloud"
     - "kimi-k2.5:cloud"
   # Unified model for text/code tasks (Cloud connection required)
-  model_name: "kimi-k2.5:cloud"
+  model_name: "gpt-oss:120b-cloud"
   # Vision model kept for image analysis (gpt-oss is text-only)
-  vision_model: "kimi-k2.5:cloud"
+  vision_model: "gpt-oss:120b-cloud"
   api_key: "ollama"
 
 security:
@@ -129,6 +129,11 @@ autonomous:
     sqlite_path: "agent_data/memory.sqlite"
     conversation_db_path: "agent_data/conversations.db"
 
+
+langgraph:
+  enabled: true
+  checkpoint_path: "agent_data/checkpoints.db"
+  max_iterations: 25
 
 voice_calls:
   twilio:

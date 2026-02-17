@@ -333,8 +333,29 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            
+            # Try to parse as JSON for actionable messages
+            try:
+                data = json.loads(raw)
+                msg_type = data.get("type")
+                
+                # Human-in-the-loop: approval response from desktop UI
+                if msg_type == "approval_response" and agent and agent._langgraph_runtime:
+                    thread_id = data.get("mission_id") or data.get("thread_id", "")
+                    approval_data = {
+                        "approved": data.get("approved", False),
+                        "feedback": data.get("feedback", ""),
+                    }
+                    logger.info(f"Approval received for {thread_id}: {approval_data}")
+                    
+                    # Resume the paused graph in background
+                    asyncio.create_task(
+                        agent._langgraph_runtime.resume(thread_id, approval_data)
+                    )
+            except (json.JSONDecodeError, Exception):
+                pass  # Non-JSON keepalive pings — ignore
+                
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 

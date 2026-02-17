@@ -117,6 +117,7 @@ class NeuralAgent:
         self.safety_framework = None # Module 12
         self.learning_engine = None  # Module 11
         self.orchestrator = None     # Module 10
+        self._langgraph_runtime = None  # LangGraph unified runtime
         
         self.active_conversation_id = None
     
@@ -207,6 +208,31 @@ class NeuralAgent:
         except Exception as e:
             logger.error(f"✗ Core systems failed: {e}")
             raise
+    
+    def _init_langgraph_runtime(self):
+        """Initialize the LangGraph unified runtime (if enabled in config)."""
+        lg_config = self.config.get('langgraph', {})
+        if not lg_config.get('enabled', False):
+            logger.info("⊘ LangGraph disabled in settings — using legacy pipeline")
+            return
+        
+        try:
+            from agent.graph.runtime import LangGraphRuntime
+            
+            self._langgraph_runtime = LangGraphRuntime(
+                app_config=self.config,
+                skill_router=self._skill_router,
+                tool_router=self._tool_router,
+                personal_memory=self.personal_memory,
+                safety_framework=self.safety_framework,
+                history_manager=self._history_manager,
+                broadcast_fn=self.sync_broadcast,
+                checkpoint_path=lg_config.get('checkpoint_path', 'agent_data/checkpoints.db'),
+            )
+            logger.info("✓ LangGraph Runtime initialized (supervisor multi-agent)")
+        except Exception as e:
+            logger.warning(f"⚠ LangGraph init failed, falling back to legacy: {e}")
+            self._langgraph_runtime = None
     
     def _init_learning_system(self):
         """Initialize learning and task orchestration."""
@@ -365,6 +391,9 @@ class NeuralAgent:
             )
             logger.info("✓ Clowbot 8-Stage Pipeline initialized")
             
+            # ── LangGraph Runtime (replaces Pipeline + SkillRouter + IntentParser) ──
+            self._init_langgraph_runtime()
+            
             self._initialized = True
             logger.info("=" * 60)
             logger.info("  NEURAL AI AGENT - Ready")
@@ -496,59 +525,50 @@ class NeuralAgent:
             # ---------------------------------------------------------
             
             # ---------------------------------------------------------
-            # CLOWBOT PIPELINE: 8-Stage Frozen Execution
+            # LANGGRAPH RUNTIME (Primary: supervisor multi-agent graph)
+            # ---------------------------------------------------------
+            if self._langgraph_runtime:
+                logger.info(f"LangGraph processing: {user_input[:80]}")
+                if source == "local" and self.sync_broadcast:
+                    self.sync_broadcast("status", "system", "Processing via LangGraph...", task_id)
+                
+                response = await self._langgraph_runtime.process(
+                    user_input=user_input,
+                    image_data=image_data,
+                    source=source,
+                    thread_id=self.active_conversation_id,
+                )
+                
+                # Broadcast + Speak
+                if source == "local" and self.sync_broadcast:
+                    self.sync_broadcast("assistant", "assistant", response, task_id)
+                if source == "local" and self._voice_manager:
+                    await self._voice_manager.speak(response, suppress_sync=True)
+                if source == "local" and self.sync_broadcast:
+                    self.sync_broadcast("status", "system", "Done", task_id)
+                
+                # Memory
+                if self._short_term_memory:
+                    self._short_term_memory.add_message("assistant", response)
+                if self._history_manager and self.active_conversation_id:
+                    self._history_manager.add_message(self.active_conversation_id, "assistant", response)
+                
+                self._state_machine.to_idle("LangGraph execution complete")
+                return response
+            # ---------------------------------------------------------
+
+            # ---------------------------------------------------------
+            # LEGACY FALLBACK: Clowbot Pipeline (used when LangGraph disabled)
             # ---------------------------------------------------------
             if hasattr(self, 'pipeline') and self.pipeline:
-                # Use the Clowbot-class pipeline if initialized
-                # This enforces: Input -> Intent -> Policy -> Planner -> Orch -> Skill -> Verify -> Audit -> Output
                 ctx = await self.pipeline.execute(
                     user_input=user_input, 
                     source=source, 
                     image_data=image_data,
-                    user_id="local_owner" # Single user mode for now
+                    user_id="local_owner"
                 )
-                
-                # The pipeline handles Voice/UI output internally in Stage 8b
-                # We just return the text response for the API/Caller
                 self._state_machine.to_idle("Pipeline execution complete")
                 return ctx.response
-            # ---------------------------------------------------------
-
-            # ---------------------------------------------------------
-            # LEGACY SKILL ROUTER PATH (Fallback / Deprecated)
-            # ---------------------------------------------------------
-            if self._skill_router:
-                # Try to route through skill system first
-                skill = self._skill_router.skill_loader.get_skill_for_intent(user_input)
-                if skill:
-                    logger.info(f"Skill routing: {user_input} -> Skill '{skill.name}'")
-                    
-                    if source == "local" and self.sync_broadcast:
-                        self.sync_broadcast("status", "system", f"Executing via {skill.name} skill...", task_id)
-                    
-                    result = await self._skill_router.route_intent(user_input)
-                    
-                    if result.success:
-                        response_text = result.result.message or str(result.result.data)
-                        
-                        # Broadcast Assistant Response
-                        if source == "local" and self.sync_broadcast:
-                            self.sync_broadcast("assistant", "assistant", response_text, task_id)
-                        
-                        # Speak
-                        if source == "local" and self._voice_manager:
-                            await self._voice_manager.speak(response_text, suppress_sync=True)
-                        
-                        # Broadcast Task Completion
-                        if source == "local" and self.sync_broadcast:
-                            self.sync_broadcast("status", "system", "Done", task_id)
-                        
-                        # Add to memory
-                        if self._short_term_memory:
-                            self._short_term_memory.add_message("assistant", response_text)
-                        
-                        self._state_machine.to_idle("Skill execution complete")
-                        return response_text
             # ---------------------------------------------------------
 
             # Parse intent

@@ -506,11 +506,13 @@ function CommandFeed({
                 {messages.map((m) => (
                     <div
                         key={m.id}
-                        className={`p-3 rounded-xl text-sm ${m.role === 'assistant'
-                            ? 'bg-white/5 border-l-4 border-white/10'
-                            : m.role === 'system'
-                                ? 'bg-amber-900/10 border-l-4 border-amber-500/40 italic text-slate-300/70 text-xs'
-                                : 'bg-slate-800/40 border-l-4 border-slate-500/40 ml-8'
+                        className={`p-3 rounded-xl text-sm ${m.id === 'step-progress'
+                                ? 'bg-teal-900/20 border-l-4 border-teal-400/50 text-teal-200/90 font-mono text-xs'
+                                : m.role === 'assistant'
+                                    ? 'bg-white/5 border-l-4 border-white/10'
+                                    : m.role === 'system'
+                                        ? 'bg-amber-900/10 border-l-4 border-amber-500/40 italic text-slate-300/70 text-xs'
+                                        : 'bg-slate-800/40 border-l-4 border-slate-500/40 ml-8'
                             }`}
                     >
                         {m.image && (
@@ -518,11 +520,24 @@ function CommandFeed({
                                 <img src={`data:image/png;base64,${m.image}`} alt="Sent content" className="max-w-full h-auto rounded-lg border border-white/10 max-h-60 object-contain" />
                             </div>
                         )}
-                        {m.content}
+                        {m.id === 'step-progress' ? (
+                            <div className="space-y-1">
+                                <div className="text-teal-300/60 text-[10px] uppercase tracking-widest mb-2 flex items-center gap-2">
+                                    <span className="w-2 h-2 bg-teal-400 rounded-full animate-pulse" />
+                                    Agent Progress
+                                </div>
+                                {m.content.split('\n').map((line: string, i: number) => (
+                                    <div key={i} className="flex items-center gap-2">
+                                        <span className="text-teal-400">{line.startsWith('✓') ? '✓' : '⏳'}</span>
+                                        <span>{line.startsWith('✓') ? line.slice(2) : line}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : m.content}
                     </div>
                 ))}
                 {/* Thinking Indicator */}
-                {isProcessing && (
+                {isProcessing && !messages.some(m => m.id === "step-progress") && (
                     <div className="p-3 rounded-xl text-sm bg-purple-900/20 border-l-4 border-purple-500/40 flex items-center gap-2">
                         <span className="text-purple-300">Agent is thinking</span>
                         <span className="flex gap-1">
@@ -1137,6 +1152,35 @@ export default function NeuralInterface() {
                         return [...filtered, { id: messageId, role: "user", content: text }];
                     }
 
+                    // STEP PROGRESS: Accumulate graph node progress into a single live indicator
+                    if (type === "step") {
+                        // Remove old loading indicator since steps provide better feedback
+                        const withoutLoading = prev.filter(m => m.id !== "loading-indicator");
+
+                        // Find existing step progress message or create one
+                        const existingIdx = withoutLoading.findIndex(m => m.id === "step-progress");
+                        const existingContent = existingIdx >= 0 ? withoutLoading[existingIdx].content : "";
+
+                        // Append new step to the progress
+                        const updatedContent = existingContent
+                            ? `${existingContent}\n${text}`
+                            : text;
+
+                        const stepMsg: Message = {
+                            id: "step-progress",
+                            role: "system" as const,
+                            content: updatedContent,
+                            kind: "indicator"
+                        };
+
+                        if (existingIdx >= 0) {
+                            const updated = [...withoutLoading];
+                            updated[existingIdx] = stepMsg;
+                            return updated;
+                        }
+                        return [...withoutLoading, stepMsg];
+                    }
+
                     // ASSISTANT / SYSTEM HANDLING - Filter out internal status messages
                     if (type === "status") {
                         const statusLower = text?.toLowerCase() || "";
@@ -1181,6 +1225,10 @@ export default function NeuralInterface() {
                             statusLower.includes("alright") ||
                             statusLower.includes("sure thing")
                         ) {
+                            // On "Done", clear step-progress tracker too
+                            if (text === "Done") {
+                                return prev.filter(m => m.id !== "step-progress" && m.id !== "loading-indicator");
+                            }
                             return prev;
                         }
 
@@ -1211,8 +1259,8 @@ export default function NeuralInterface() {
 
                     // For assistant messages, prevent duplicates and remove loading
                     if (type === "assistant") {
-                        // Remove loading/listening indicators when assistant replies
-                        const withoutLoading = prev.filter(m => m.id !== "loading-indicator" && m.id !== "listening-indicator");
+                        // Remove loading/listening/step indicators when assistant replies
+                        const withoutLoading = prev.filter(m => m.id !== "loading-indicator" && m.id !== "listening-indicator" && m.id !== "step-progress");
 
                         // SMART DUPLICATE CHECK: 
                         // sometimes the same message comes twice with slightly different timestamps.
@@ -1459,18 +1507,18 @@ export default function NeuralInterface() {
                                 : messages.filter((m) => m.kind !== "trace" && m.kind !== "indicator");
 
                             return (
-                        <CommandFeed
-                            messages={visibleMessages}
-                            onSend={handleCommand}
-                            isProcessing={aiState === "thinking" || aiState === "speaking"}
-                            onToggleMute={toggleMute}
-                            isMuted={isMuted}
-                            onToggleCode={() => setShowCodeEditor(true)}
-                            onToggleCamera={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')}
-                            onToggleCCTV={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')}
-                            liveFeedMode={liveFeedMode}
-                            onToggleDashboard={() => setShowDashboard(true)}
-                        />
+                                <CommandFeed
+                                    messages={visibleMessages}
+                                    onSend={handleCommand}
+                                    isProcessing={aiState === "thinking" || aiState === "speaking"}
+                                    onToggleMute={toggleMute}
+                                    isMuted={isMuted}
+                                    onToggleCode={() => setShowCodeEditor(true)}
+                                    onToggleCamera={() => setLiveFeedMode(p => p === 'camera' ? 'idle' : 'camera')}
+                                    onToggleCCTV={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')}
+                                    liveFeedMode={liveFeedMode}
+                                    onToggleDashboard={() => setShowDashboard(true)}
+                                />
                             );
                         })()}
                     </div>
