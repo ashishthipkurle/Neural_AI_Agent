@@ -73,10 +73,13 @@ export default function TerminalPanel({ isOpen, onToggle, cwd, hideHeader = fals
             try {
                 const parsed: TerminalTab[] = JSON.parse(saved);
                 if (parsed.length > 0) {
-                    setTabs(parsed);
-                    setActiveTabId(parsed[0].id);
-                    // Recreate PTY sessions for restored tabs
-                    parsed.forEach((tab) => {
+                    // Override saved cwd with the current project cwd if available
+                    const effectiveCwd = cwd || DEFAULT_CWD;
+                    const updatedTabs = parsed.map((tab) => ({ ...tab, cwd: effectiveCwd }));
+                    setTabs(updatedTabs);
+                    setActiveTabId(updatedTabs[0].id);
+                    // Recreate PTY sessions with the current project cwd
+                    updatedTabs.forEach((tab) => {
                         api.terminal.create({
                             id: tab.id,
                             cwd: tab.cwd,
@@ -111,6 +114,41 @@ export default function TerminalPanel({ isOpen, onToggle, cwd, hideHeader = fals
         }));
         localStorage.setItem("terminal-tabs", JSON.stringify(tabData));
     }, [tabs]);
+
+    /* =============== RESET TERMINALS WHEN PROJECT CHANGES ============== */
+
+    const prevCwdRef = useRef<string | undefined>(cwd);
+
+    useEffect(() => {
+        // Skip the very first render (initial mount) — restore handler takes care of it
+        if (!restoreAttempted) return;
+        // Only act when cwd actually changes to a *different* value
+        if (cwd === prevCwdRef.current) return;
+        prevCwdRef.current = cwd;
+
+        if (!cwd) return;
+
+        // Tear down every existing terminal tab
+        tabs.forEach((tab) => {
+            api.terminal.kill(tab.id);
+            const instance = termInstances.current.get(tab.id);
+            if (instance) {
+                instance.cleanup();
+                instance.term.dispose();
+                termInstances.current.delete(tab.id);
+            }
+        });
+
+        // Clear old tabs and create a fresh one at the new project directory
+        setTabs([]);
+        setActiveTabId(null);
+        localStorage.removeItem("terminal-tabs");
+
+        // Small delay so React can flush the empty state before creating new tab
+        setTimeout(() => {
+            createTab("powershell");
+        }, 50);
+    }, [cwd, restoreAttempted]);
 
     /* ============================ CLOSE TAB ============================ */
 

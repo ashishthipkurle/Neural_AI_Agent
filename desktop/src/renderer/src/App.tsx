@@ -25,6 +25,8 @@ import {
     Camera,
     Trash2,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import AIGlobe from "./components/AIGlobe";
 import CodeEditorView from "./components/CodeEditor/CodeEditorView";
 import Dashboard from "./components/Dashboard/Dashboard";
@@ -412,6 +414,75 @@ function HistoryPanel({ metrics, onSelectChat, onCreateChat, activeChatId, onDel
     );
 }
 
+/* ================= FORMATTED MESSAGE ================= */
+
+function FormattedMessage({ content, role }: { content: string; role: string }) {
+    if (role === "user") {
+        return <span style={{ whiteSpace: "pre-wrap" }}>{content}</span>;
+    }
+
+    return (
+        <div className="markdown-body">
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                    h1: ({ children }) => <h1 className="text-lg font-bold text-slate-100 mt-3 mb-2">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-base font-semibold text-slate-200 mt-3 mb-1.5">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-200 mt-2 mb-1">{children}</h3>,
+                    p: ({ children }) => <p className="mb-2 leading-relaxed">{children}</p>,
+                    ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1 pl-2">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1 pl-2">{children}</ol>,
+                    li: ({ children }) => <li className="text-slate-300">{children}</li>,
+                    strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
+                    em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
+                    a: ({ href, children }) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2">
+                            {children}
+                        </a>
+                    ),
+                    code: ({ className, children, ...props }) => {
+                        const isBlock = className?.startsWith("language-");
+                        if (isBlock) {
+                            return (
+                                <div className="my-2 rounded-lg overflow-hidden bg-black/40 border border-white/10">
+                                    <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-400 border-b border-white/10 bg-white/5">
+                                        {className?.replace("language-", "") || "code"}
+                                    </div>
+                                    <pre className="p-3 overflow-x-auto text-xs">
+                                        <code className="text-emerald-300 font-mono" {...props}>{children}</code>
+                                    </pre>
+                                </div>
+                            );
+                        }
+                        return (
+                            <code className="px-1.5 py-0.5 rounded bg-white/10 text-cyan-300 text-xs font-mono" {...props}>
+                                {children}
+                            </code>
+                        );
+                    },
+                    pre: ({ children }) => <>{children}</>,
+                    table: ({ children }) => (
+                        <div className="my-2 overflow-x-auto rounded-lg border border-white/10">
+                            <table className="w-full text-xs">{children}</table>
+                        </div>
+                    ),
+                    thead: ({ children }) => <thead className="bg-white/5 text-slate-300">{children}</thead>,
+                    th: ({ children }) => <th className="px-3 py-2 text-left font-medium border-b border-white/10">{children}</th>,
+                    td: ({ children }) => <td className="px-3 py-2 border-b border-white/5 text-slate-400">{children}</td>,
+                    hr: () => <hr className="my-3 border-white/10" />,
+                    blockquote: ({ children }) => (
+                        <blockquote className="border-l-2 border-cyan-500/40 pl-3 my-2 text-slate-400 italic">
+                            {children}
+                        </blockquote>
+                    ),
+                }}
+            >
+                {content}
+            </ReactMarkdown>
+        </div>
+    );
+}
+
 /* ================= COMMAND FEED ================= */
 
 
@@ -419,6 +490,7 @@ interface CommandFeedProps {
     messages: Message[];
     onSend: (t: string, image?: string | null) => void;
     isProcessing?: boolean;
+    onStop?: () => void;
     onToggleMute: () => void;
     isMuted: boolean;
     onToggleCode: () => void;
@@ -432,6 +504,7 @@ function CommandFeed({
     messages,
     onSend,
     isProcessing = false,
+    onStop,
     onToggleMute,
     isMuted,
     onToggleCode,
@@ -507,12 +580,12 @@ function CommandFeed({
                     <div
                         key={m.id}
                         className={`p-3 rounded-xl text-sm ${m.id === 'step-progress'
-                                ? 'bg-teal-900/20 border-l-4 border-teal-400/50 text-teal-200/90 font-mono text-xs'
-                                : m.role === 'assistant'
-                                    ? 'bg-white/5 border-l-4 border-white/10'
-                                    : m.role === 'system'
-                                        ? 'bg-amber-900/10 border-l-4 border-amber-500/40 italic text-slate-300/70 text-xs'
-                                        : 'bg-slate-800/40 border-l-4 border-slate-500/40 ml-8'
+                            ? 'bg-teal-900/20 border-l-4 border-teal-400/50 text-teal-200/90 font-mono text-xs'
+                            : m.role === 'assistant'
+                                ? 'bg-white/5 border-l-4 border-white/10'
+                                : m.role === 'system'
+                                    ? 'bg-amber-900/10 border-l-4 border-amber-500/40 italic text-slate-300/70 text-xs'
+                                    : 'bg-slate-800/40 border-l-4 border-slate-500/40 ml-8'
                             }`}
                     >
                         {m.image && (
@@ -533,7 +606,7 @@ function CommandFeed({
                                     </div>
                                 ))}
                             </div>
-                        ) : m.content}
+                        ) : <FormattedMessage content={m.content} role={m.role} />}
                     </div>
                 ))}
                 {/* Thinking Indicator */}
@@ -622,13 +695,24 @@ function CommandFeed({
                         placeholder={isProcessing ? "Wait for response..." : "Type a command..."}
                         className="flex-1 px-4 py-3 bg-black/20 text-slate-200 text-base focus:outline-none placeholder:text-slate-500 disabled:cursor-not-allowed"
                     />
-                    <button
-                        disabled={isProcessing}
-                        className={`px-4 text-black transition-colors ${isProcessing ? 'bg-slate-600' : 'bg-slate-200 hover:bg-slate-100'
-                            }`}
-                    >
-                        <Send size={18} />
-                    </button>
+                    {isProcessing && onStop ? (
+                        <button
+                            type="button"
+                            onClick={onStop}
+                            className="px-4 bg-red-500/80 hover:bg-red-500 text-white transition-colors flex items-center gap-1.5"
+                            title="Stop agent"
+                        >
+                            <X size={16} />
+                            <span className="text-xs font-medium">Stop</span>
+                        </button>
+                    ) : (
+                        <button
+                            disabled={isProcessing}
+                            className={`px-4 text-black transition-colors ${isProcessing ? 'bg-slate-600' : 'bg-slate-200 hover:bg-slate-100'}`}
+                        >
+                            <Send size={18} />
+                        </button>
+                    )}
                 </div>
             </form>
         </div>
@@ -871,6 +955,7 @@ export default function NeuralInterface() {
     const [audioAnalyzer, setAudioAnalyzer] = useState<AnalyserNode | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    const chatAbortRef = useRef<AbortController | null>(null);
 
     useEffect(() => {
         // Ensure Code Editor can always be opened even if the on-screen controls are not visible.
@@ -1406,11 +1491,15 @@ export default function NeuralInterface() {
             const payload: any = { message: text };
             if (imageData) payload.image = imageData;
 
+            const controller = new AbortController();
+            chatAbortRef.current = controller;
+
             // Trigger command via backend API
             const httpResponse = await fetch('http://localhost:8000/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal: controller.signal,
             });
 
             // Fallback completion path: if websocket completion events are delayed/missed,
@@ -1440,8 +1529,19 @@ export default function NeuralInterface() {
             }
 
             setAiState('idle');
+            chatAbortRef.current = null;
 
-        } catch (error) {
+        } catch (error: any) {
+            chatAbortRef.current = null;
+            if (error.name === 'AbortError') {
+                setMessages(p => [...p, {
+                    id: Date.now().toString(),
+                    role: "system",
+                    content: "⏹ Agent stopped by user."
+                }]);
+                setAiState('idle');
+                return;
+            }
             console.error("Sync interaction failed:", error);
             setMessages(p => [...p, {
                 id: Date.now().toString(),
@@ -1450,6 +1550,14 @@ export default function NeuralInterface() {
             }]);
             setAiState('idle');
         }
+    };
+
+    const handleStopChat = () => {
+        if (chatAbortRef.current) {
+            chatAbortRef.current.abort();
+            chatAbortRef.current = null;
+        }
+        setAiState('idle');
     };
 
     // Toggle mute via backend API
@@ -1511,6 +1619,7 @@ export default function NeuralInterface() {
                                     messages={visibleMessages}
                                     onSend={handleCommand}
                                     isProcessing={aiState === "thinking" || aiState === "speaking"}
+                                    onStop={handleStopChat}
                                     onToggleMute={toggleMute}
                                     isMuted={isMuted}
                                     onToggleCode={() => setShowCodeEditor(true)}

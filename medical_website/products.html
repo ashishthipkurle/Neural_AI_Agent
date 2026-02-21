@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Equipment Catalog</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Equipment Catalog</h1>
+            <p>Browse our wide range of professional equipment</p>
+        </header>
+
+        <section class="filters">
+            <div class="filter-group">
+                <label for="category">Category:</label>
+                <select id="category">
+                    <option value="all">All Categories</option>
+                    <option value="surgical">Surgical Instruments</option>
+                    <option value="diagnostic">Diagnostic Equipment</option>
+                    <option value="laboratory">Laboratory Equipment</option>
+                    <option value="imaging">Imaging Systems</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="brand">Brand:</label>
+                <select id="brand">
+                    <option value="all">All Brands</option>
+                    <option value="meditech">MediTech</option>
+                    <option value="healthpro">HealthPro</option>
+                    <option value="bioadvance">BioAdvance</option>
+                    <option value="precision">Precision Labs</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="price-range">Price Range:</label>
+                <select id="price-range">
+                    <option value="all">All Prices</option>
+                    <option value="0-1000">$0 - $1,000</option>
+                    <option value="1000-5000">$1,000 - $5,000</option>
+                    <option value="5000-10000">$5,000 - $10,000</option>
+                    <option value="10000+">$10,000+</option>
+                </select>
+            </div>
+
+            <button id="reset-filters">Reset Filters</button>
+        </section>
+
+        <section class="product-grid" id="product-grid">
+            <!-- Products will be dynamically loaded here -->
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+import React from 'react';\n\nconst Products = () => {\n  return (\n    <div>\n      <h1>Our Products</h1>\n      <p>Check out our amazing products.</p>\n    </div>\n  );\n};\n\nexport default Products;

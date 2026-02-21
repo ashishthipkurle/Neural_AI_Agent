@@ -549,13 +549,16 @@ class PlanningSkill(BaseSkill):
                 clean_goal = re.sub(r'\s+', ' ', clean_goal).strip()
                 topic = f"Hello, I'd like to talk about {clean_goal[:100]}."
             
-            # Step 1: Navigate to the site
+            # Step 1: Navigate to the site (use fresh-chat URL to avoid stale conversations)
+            fresh_url = detected_url
+            if "chatgpt" in (detected_site or "").lower():
+                fresh_url = "https://chatgpt.com/?model=auto"  # forces a new chat
             steps.append(PlanStep(
                 id=step_id,
                 skill="browser",
                 action="navigate",
-                params={"url": detected_url},
-                description=f"Navigate to {detected_site}"
+                params={"url": fresh_url},
+                description=f"Navigate to {detected_site} (new conversation)"
             ))
             step_id += 1
             

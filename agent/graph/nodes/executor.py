@@ -25,14 +25,15 @@ logger = logging.getLogger("graph.executor")
 
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 12
 LLM_RETRY_ATTEMPTS = 2
 
 EXECUTOR_PROMPT = """\
-You are an Executor Agent. You perform real-world actions using tools.
+You are an Executor Agent. You perform REAL-WORLD ACTIONS using tools.
 
-Available tools and their correct usage:
-─────────────────────────────────────────
+>>> CRITICAL: ACT IMMEDIATELY. DO NOT EXPLORE. <<<
+You already know the workspace structure (shown below). Do NOT waste rounds on list_dir, search, or read_file.
+Your FIRST tool call should be a PRODUCTIVE action: write_file, coding_tool(execute_code), ltm_tool, or kg_tool.
 file_ops_tool(action, path, content)
   Actions: read_file, write_file, list_dir, create_dir, delete_path, search, exists
   - write_file: content MUST be a string. For JSON, format as string: content='{{"key":"value"}}'
@@ -41,21 +42,33 @@ file_ops_tool(action, path, content)
 
 coding_tool(action, code, language, path)
   Actions: write_code, execute_code, run_command
-  - execute_code: runs Python code. Pass code= with Python source. It gets written to a temp file and run.
+  - execute_code: runs Python code. Pass code= with Python source.
   - NEVER read a Python script with file_ops_tool read_file expecting it to execute. Use coding_tool instead.
 
 memory_tool(action, content, query)
   Actions: store, search, recall
-  - store: saves content to long-term memory with content= param
-  - search: queries memory with query= param
+  - store: saves content to personal memory with content= param
+  - search: queries personal memory with query= param
+
+ltm_tool(action, key, value, category, query)
+  Actions: store, retrieve, search
+  - store: saves to VERSIONED Long-Term Memory database. Requires key= and value=.
+  - retrieve: gets current value for key=.
+  - search: keyword search with query=.
+  USE THIS to update Long-Term Memory, NOT memory_tool.
+
+kg_tool(action, entity_id, entity_type, name, source, target, relation_type, query)
+  Actions: add_entity, add_relation, get_entity, find_entities, stats
+  - add_entity: creates an entity. Requires entity_id=, entity_type=, name=.
+  - add_relation: links two entities. Requires source=, target=, relation_type=. BOTH entities must already exist.
+  - stats: returns entity/relation counts.
+  USE THIS to update the Knowledge Graph.
 
 desktop_tool(action, app_name, text, key)
   Actions: launch_app, type_text, press_key, click, screenshot
-  - To open a folder in file explorer: action=launch_app, app_name="explorer <full_path>"
 
 vision_tool(action, question, path, text)
   Actions: screenshot, analyze, ocr, detect_elements, find_text, compare, read_popup
-  - analyze: describes what's on screen. Pass question= for specific analysis.
 
 system_tool(action, app_name, expression)
   Actions: launch_app, calculate, system_info
@@ -77,14 +90,20 @@ Current workspace contents:
 {workspace_listing}
 
 CRITICAL RULES:
-1. BUILD FULL PATHS — if the task mentions a subdirectory (e.g. "inside X"), use {workspace}/X/filename as the path. NEVER write files to the workspace root when a subdirectory is specified.
-2. ACT DIRECTLY — you already know the workspace structure above. Do NOT call list_dir unless checking a subfolder you just created.
-3. To EXECUTE Python code, use coding_tool(action="execute_code", code="..."). Do NOT read a .py file with file_ops_tool and expect it to run.
-4. To STORE information in memory, use memory_tool(action="store", content="...").
-5. To OPEN a folder, use desktop_tool(action="launch_app", app_name="explorer <path>").
+1. BUILD FULL PATHS — if the task mentions a subdirectory (e.g. "inside X"), use {workspace}/X/filename as the path.
+2. ACT DIRECTLY — you already know the workspace structure above. Do NOT call list_dir or search unless absolutely necessary.
+3. To EXECUTE Python code, use coding_tool(action="execute_code", code="...").
+4. To update Long-Term Memory, use ltm_tool(action="store", key="...", value="...").
+5. To update Knowledge Graph, use kg_tool(action="add_entity", ...) then kg_tool(action="add_relation", ...).
 6. When done, respond with a plain-text summary (no tool calls).
-7. When a task mentions "from step_N" or "using step_N output", that refers to context from a previous agent — do NOT search for files named 'step_1' or 'step_N'. Instead, proceed with your best knowledge of the task.
-8. Keep responses SHORT. Output ONE tool call at a time — do not embed long code in tool arguments unless absolutely necessary.
+7. When a task mentions "from step_N" or "using step_N output", that refers to context from a previous agent — do NOT search for files. Proceed with your best knowledge.
+8. Keep responses SHORT. Output ONE tool call at a time.
+9. Do NOT use file_ops_tool(action="search") to look for data you should CREATE. If a file does not exist, CREATE it with write_file. If you need to store structured data, use ltm_tool or kg_tool.
+10. AUDIT LOGS are stored at {workspace}/agent_data/audit_logs/ as JSON files (one per session). Do NOT search for "audit.log" — it does not exist. Read files from agent_data/audit_logs/ directly.
+11. LTM is stored in agent_data/ltm.db (use ltm_tool). KG is stored in agent_data/knowledge_graph.json (use kg_tool). Do NOT read these files directly — use the tools.
+12. STM (Short-Term Memory) is an IN-MEMORY data structure — there are no STM files on disk. When a task mentions "STM timestamps" or "STM state", use coding_tool(action="execute_code") to generate the data (e.g. with datetime.now()) and write it directly. Do NOT search for STM files.
+13. To RUN or DEPLOY a Python script, use coding_tool(action="execute_code", code="<paste or inline the full script source>"). Do NOT just read_file the script and stop — read_file only returns text, it does NOT execute anything.
+14. When told to "launch", "run", or "execute" tasks from previous steps, use file_ops_tool(read_file) to get the EXISTING script content, then pass that content to coding_tool(action="execute_code", code=<script content>). Do NOT write a new simulation or placeholder script. Run the ACTUAL code that was already created.
 """
 
 
@@ -113,6 +132,8 @@ def _get_tool_map():
         "coding_tool": t.coding_tool,
         "browser_tool": t.browser_tool,
         "research_tool": t.research_tool,
+        "ltm_tool": t.ltm_tool,
+        "kg_tool": t.kg_tool,
     }
 
 
@@ -171,11 +192,13 @@ async def executor_node(state: AgentState, config: RunnableConfig) -> Dict[str, 
         desktop_tool, system_tool, voice_tool,
         telegram_tool, vision_tool, file_ops_tool,
         memory_tool, coding_tool, browser_tool, research_tool,
+        ltm_tool, kg_tool,
     )
 
     app_config = config.get("configurable", {}).get("app_config", {})
     tools = [desktop_tool, system_tool, voice_tool, telegram_tool, vision_tool,
-             file_ops_tool, memory_tool, coding_tool, browser_tool, research_tool]
+             file_ops_tool, memory_tool, coding_tool, browser_tool, research_tool,
+             ltm_tool, kg_tool]
 
     try:
         llm = get_llm_with_tools(app_config, tools)
@@ -216,7 +239,7 @@ async def executor_node(state: AgentState, config: RunnableConfig) -> Dict[str, 
     tool_results = dict(state.get("tool_results", {}))
     final_text = ""
     round_num = 0
-    consecutive_listdir_rounds = 0
+    non_productive_rounds = 0  # Unified counter for any read-only round
 
     # ── Multi-turn tool-calling loop ──────────────────────────────
     try:
@@ -234,40 +257,42 @@ async def executor_node(state: AgentState, config: RunnableConfig) -> Dict[str, 
 
             messages.append(response)
 
-            # Check if ALL calls this round are list_dir
-            all_list_dir = all(
-                tc.get("name") == "file_ops_tool" and tc.get("args", {}).get("action") in ("list_dir", "ls")
+            # Unified non-productive round detector: any round where ALL calls are read-only
+            READ_ONLY_ACTIONS = {"list_dir", "ls", "search", "read_file", "exists"}
+            all_readonly = all(
+                tc.get("name") == "file_ops_tool" and tc.get("args", {}).get("action") in READ_ONLY_ACTIONS
                 for tc in tc_list
             )
-            if all_list_dir:
-                consecutive_listdir_rounds += 1
+            if all_readonly:
+                non_productive_rounds += 1
             else:
-                consecutive_listdir_rounds = 0
+                non_productive_rounds = 0  # Reset when agent actually acts
 
             for tc in tc_list:
                 name = tc.get("name", "")
                 args = tc.get("args", {})
                 tc_id = tc.get("id", f"call_{round_num}_{name}")
 
-                # HARD BLOCK: After 2 consecutive list_dir-only rounds, block further list_dir
-                if consecutive_listdir_rounds >= 2 and name == "file_ops_tool" and args.get("action") in ("list_dir", "ls"):
+                # HARD BLOCK: After 4 non-productive (read-only) rounds, block ALL read-only actions
+                if non_productive_rounds >= 4 and name == "file_ops_tool" and args.get("action") in READ_ONLY_ACTIONS:
                     result_str = (
-                        "BLOCKED: You have already listed directories multiple times. "
-                        "The workspace is at: " + WORKSPACE_ROOT + ". "
-                        "Stop exploring and perform the actual task NOW."
+                        "BLOCKED: You have spent " + str(non_productive_rounds) + " rounds on read-only operations "
+                        "(list_dir/search/read_file) without performing ANY real action. "
+                        "STOP exploring. PERFORM the task NOW using coding_tool(execute_code), "
+                        "file_ops_tool(write_file), ltm_tool, or kg_tool."
                     )
-                    logger.warning(f"Blocked repeated list_dir call to: {args.get('path', '?')}")
+                    logger.warning(f"Blocked non-productive round {non_productive_rounds}: {name}({args.get('action', '?')})")
                 else:
                     result_str = await _execute_single_tool(name, args, tool_map)
 
                 tool_results[f"executor_{name}_r{round_num}"] = result_str
                 messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
 
-            # After blocking, also inject a redirect message
-            if consecutive_listdir_rounds >= 2:
+            # After 4+ non-productive rounds, inject a strong redirect
+            if non_productive_rounds >= 4:
                 messages.append(HumanMessage(
-                    content="STOP listing directories. You already know the workspace structure. "
-                            "Perform the actual task NOW using write_file, create_dir, or other actions."
+                    content="STOP all read-only operations. You have wasted " + str(non_productive_rounds) + " rounds. "
+                            "ACT NOW: use coding_tool(execute_code), ltm_tool, kg_tool, or file_ops_tool(write_file)."
                 ))
 
             logger.info(f"Executor round {round_num + 1}: executed {len(tc_list)} tool(s)")

@@ -13,8 +13,8 @@ export default function AIGlobe({ audioAnalyzer, aiState = "idle", isMuted = fal
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const stateRef = useRef(aiState); // Ref for loop access
   const isMutedRef = useRef(isMuted); // Ref for mute state in loop
-  const materialRef = useRef<THREE.ShaderMaterial | null>(null);
-  const globeRef = useRef<THREE.Points | null>(null);
+  const materialRef = useRef<any>(null);
+  const globeRef = useRef<any>(null);
 
   /* =======================
      KEEP REFS STABLE
@@ -199,7 +199,8 @@ export default function AIGlobe({ audioAnalyzer, aiState = "idle", isMuted = fal
     const clock = new THREE.Clock();
     let raf = 0;
 
-    let freqData: Uint8Array | null = null;
+    // TS 5.7+ typed-array generics: WebAudio expects Uint8Array<ArrayBuffer>
+    let freqData: Uint8Array<ArrayBuffer> | null = null;
     let a = 0, b = 0, m = 0, h = 0;
 
     // State interpolation
@@ -219,7 +220,7 @@ export default function AIGlobe({ audioAnalyzer, aiState = "idle", isMuted = fal
         // ===== AUDIO ACTIVE =====
         const bins = analyzer.frequencyBinCount;
         if (!freqData || freqData.length !== bins) {
-          freqData = new Uint8Array(bins);
+          freqData = new Uint8Array(bins) as Uint8Array<ArrayBuffer>;
         }
 
         analyzer.getByteFrequencyData(freqData);

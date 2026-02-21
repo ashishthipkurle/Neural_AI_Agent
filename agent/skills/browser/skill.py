@@ -353,6 +353,14 @@ class AdvancedBrowserSkill(BaseSkill):
                 hard_stop_time = mission_started_at + requested_seconds
                 
                 self.logger.info(f"Starting chat loop for {minutes} minutes on topic: {topic}")
+
+                # Count pre-existing assistant messages so we only react to NEW ones
+                pre_existing_count = 0
+                try:
+                    pre_existing_count = await self.page.locator("[data-message-author-role='assistant']").count()
+                    self.logger.info(f"Pre-existing assistant messages on page: {pre_existing_count}")
+                except Exception:
+                    pass
                 
                 conversation_log = []
                 last_response = ""
@@ -519,10 +527,19 @@ class AdvancedBrowserSkill(BaseSkill):
 
                 def _build_follow_up(latest_response: str, topic_seed: str) -> str:
                     cleaned = " ".join(latest_response.split())
-                    cue = cleaned[:70] if cleaned else topic_seed[:70]
-                    return (
-                        f"Go one level deeper on: {cue}. Keep it concise, with one intuitive example and one short check question."
-                    )[:180]
+                    # Always anchor follow-ups to the original topic so the conversation stays on track
+                    topic_hint = topic_seed[:60].strip() if topic_seed else "the topic"
+                    if cleaned and len(cleaned) > 30:
+                        cue = cleaned[:80]
+                        return (
+                            f"Continuing our discussion about {topic_hint}: "
+                            f"Go deeper on: {cue}. Give a concrete example or data point."
+                        )[:250]
+                    else:
+                        return (
+                            f"Tell me more about {topic_hint}. "
+                            f"Include a specific example, fact, or comparison."
+                        )[:250]
                 
                 while time.time() < hard_stop_time:
                     try:
@@ -569,16 +586,22 @@ class AdvancedBrowserSkill(BaseSkill):
                         except Exception:
                             pass
 
-                        # 1. Read latest response
+                        # 1. Read latest response (only NEW messages after our first send)
                         try:
                             assistant_msgs = self.page.locator("[data-message-author-role='assistant'] .markdown")
                             count = await assistant_msgs.count()
-                            if count > 0:
+                            if count > pre_existing_count and count > 0:
+                                current_response = await assistant_msgs.nth(count - 1).inner_text()
+                            elif count > 0 and pre_existing_count == 0:
                                 current_response = await assistant_msgs.nth(count - 1).inner_text()
                             else:
+                                # No new messages yet — check raw blocks as fallback
                                 assistant_blocks = self.page.locator("[data-message-author-role='assistant']")
                                 block_count = await assistant_blocks.count()
-                                current_response = await assistant_blocks.nth(block_count - 1).inner_text() if block_count > 0 else ""
+                                if block_count > pre_existing_count:
+                                    current_response = await assistant_blocks.nth(block_count - 1).inner_text()
+                                else:
+                                    current_response = ""
                                 
                             # Fallback if specific selectors fail but body is readable
                             if not current_response:

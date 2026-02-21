@@ -19,6 +19,8 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger("graph.tools")
 
+WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 # ---------------------------------------------------------------------------
 # These module-level holders are populated by ``register_skills()`` at startup
 # ---------------------------------------------------------------------------
@@ -388,6 +390,131 @@ def system_tool(action: str, app_name: str = "", expression: str = "") -> str:
 
 
 # =========================================================================
+# LTM + Knowledge Graph tools — direct access to §5 memory systems
+# =========================================================================
+
+@tool
+def ltm_tool(action: str, key: str = "", value: Any = "", category: str = "general", query: str = "") -> str:
+    """Store or retrieve from Long-Term Memory (versioned, persistent database).
+
+    Args:
+        action: One of store, retrieve, search.
+        key: Memory key (required for store and retrieve).
+        value: Content to store (required for store). Can be a string or JSON object.
+        category: Memory category (default: general).
+        query: Search keyword (required for search).
+    """
+    try:
+        from agent.memory.ltm import VersionedLTM
+        ltm = VersionedLTM()
+
+        if action == "store":
+            if not key or not value:
+                return "Error: ltm_tool store requires key and value"
+            # Auto-serialize dict/list values to JSON string
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, default=str)
+            else:
+                value = str(value)
+            result = ltm.store(key=key, value=value, category=category)
+            return json.dumps(result)
+
+        elif action == "retrieve":
+            if not key:
+                return "Error: ltm_tool retrieve requires key"
+            val = ltm.retrieve(key)
+            if val is None:
+                return f"No LTM entry found for key '{key}'"
+            return val
+
+        elif action == "search":
+            if not query:
+                return "Error: ltm_tool search requires query"
+            results = ltm.search(query, category=category if category != "general" else None)
+            if not results:
+                return f"No LTM entries matching '{query}'"
+            return json.dumps(results, indent=2)
+
+        else:
+            return f"Error: unknown ltm_tool action '{action}'. Use store, retrieve, or search."
+    except Exception as e:
+        logger.error(f"ltm_tool.{action} failed: {e}")
+        return f"Error: {e}"
+
+
+@tool
+def kg_tool(action: str, entity_id: str = "", entity_type: str = "", name: str = "",
+            source: str = "", target: str = "", relation_type: str = "",
+            query: str = "") -> str:
+    """Add entities and relations to the Knowledge Graph, or query it.
+
+    Args:
+        action: One of add_entity, add_relation, get_entity, find_entities, stats.
+        entity_id: Entity identifier (for add_entity, get_entity).
+        entity_type: Entity type string (for add_entity, find_entities).
+        name: Entity display name (for add_entity).
+        source: Source entity ID (for add_relation).
+        target: Target entity ID (for add_relation).
+        relation_type: Relation type string (for add_relation).
+        query: Name substring filter (for find_entities).
+    """
+    try:
+        from agent.memory.knowledge_graph import KnowledgeGraph
+        import os
+        kg_path = os.path.join(WORKSPACE_ROOT, "agent_data", "knowledge_graph.json")
+        kg = KnowledgeGraph(path=kg_path)
+
+        if action == "add_entity":
+            if not entity_id or not entity_type or not name:
+                return "Error: add_entity requires entity_id, entity_type, and name"
+            is_new = kg.add_entity(entity_id=entity_id, entity_type=entity_type, name=name)
+            return f"Entity '{entity_id}' {'created' if is_new else 'updated'}"
+
+        elif action == "add_relation":
+            if not source or not target or not relation_type:
+                return "Error: add_relation requires source, target, and relation_type"
+            # Check entities exist FIRST to give correct error
+            if kg.get_entity(source) is None or kg.get_entity(target) is None:
+                missing = []
+                if kg.get_entity(source) is None:
+                    missing.append(source)
+                if kg.get_entity(target) is None:
+                    missing.append(target)
+                return f"Relation failed: entities not found: {', '.join(missing)}. Create them with add_entity first."
+            ok = kg.add_relation(source=source, target=target, relation_type=relation_type)
+            if ok:
+                return f"Relation added: {source} --[{relation_type}]--> {target}"
+            return f"Relation already exists: {source} --[{relation_type}]--> {target} (no change needed, move on)"
+
+        elif action == "get_entity":
+            if not entity_id:
+                return "Error: get_entity requires entity_id"
+            entity = kg.get_entity(entity_id)
+            if entity is None:
+                return f"Entity '{entity_id}' not found"
+            return json.dumps(entity, indent=2, default=str)
+
+        elif action == "find_entities":
+            results = kg.find_entities(
+                entity_type=entity_type or None,
+                name_contains=query or None,
+            )
+            if not results:
+                return "No entities found"
+            return json.dumps(results, indent=2, default=str)
+
+        elif action == "stats":
+            s = kg.stats()
+            return json.dumps(s)
+
+        else:
+            return f"Error: unknown kg_tool action '{action}'. Use add_entity, add_relation, get_entity, find_entities, or stats."
+    except Exception as e:
+        logger.error(f"kg_tool.{action} failed: {e}")
+        return f"Error: {e}"
+
+
+# =========================================================================
 # Public list for bind_tools()
 # =========================================================================
 ALL_TOOLS = [
@@ -396,6 +523,8 @@ ALL_TOOLS = [
     research_tool,
     coding_tool,
     memory_tool,
+    ltm_tool,
+    kg_tool,
     telegram_tool,
     voice_tool,
     vision_tool,

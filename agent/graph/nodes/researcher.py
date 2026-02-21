@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -21,23 +22,32 @@ from agent.graph.state import AgentState
 
 logger = logging.getLogger("graph.researcher")
 
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 4
 LLM_RETRY_ATTEMPTS = 2
+WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 RESEARCHER_PROMPT = """\
-You are a Research Agent. Search for information and synthesize findings.
+You are a Research Agent. Search for information, verify data, and synthesize findings.
 
-Available tools:
-- research_tool: search the web (query: str)
-- browser_tool: navigate to a URL (url: str, action: str)
-- memory_tool: search personal memory (action: store | search | recall, query: str, content: str)
+WORKSPACE: {workspace}
 
-RULES:
-1. ACT DIRECTLY. Call the most relevant tool first.
-2. When done, respond with a plain-text summary (no tool calls).
-3. When a task mentions "from step_N" or "using step_N output", that refers to context from a previous agent — do NOT search for files named 'step_1'. Proceed with your best knowledge.
-4. If memory_tool returns nothing useful, summarize what you know and FINISH. Do NOT call research_tool for internal architecture — it will search the web, which is wrong for internal system knowledge.
-5. Keep responses SHORT.
+Available tools (in priority order):
+1. memory_tool: search personal memory (action: store | search | recall, query: str, content: str)
+2. file_ops_tool: read/write local project files (action: read_file | write_file | list_dir, path: str) — use for INTERNAL documentation. Build full paths from WORKSPACE above.
+3. coding_tool: run Python code locally (action: execute_code, code: str) — use to compute hashes, parse JSON, run scripts, etc.
+4. research_tool: search the WEB (query: str) — ONLY for external/public info (news, Wikipedia, etc.)
+5. browser_tool: navigate to a URL (url: str, action: str)
+
+CRITICAL RULES:
+1. ALWAYS call memory_tool FIRST. Only use research_tool if the task explicitly requires web/internet data.
+2. research_tool searches the INTERNET. NEVER use it for questions about this agent's own architecture, internal systems, execution environment, or file-system layout.
+3. INTERNAL TOPICS (NEVER web-search these): STM, LTM, Knowledge Graph, audit logs, agent_data/, agent/memory/, agent/graph/, agent/skills/, agent/vision/, agent/voice/, any agent subsystem API, tool signatures, or execution pipeline. For these, use file_ops_tool(read_file) or just summarize from your own knowledge.
+4. COMPUTABLE VALUES (NEVER web-search these): SHA-256 hashes, checksums, file counts, timestamps, JSON parsing, string operations. Use coding_tool(action="execute_code", code="import hashlib; ...") to compute them locally.
+5. If memory_tool returns nothing useful, summarize what you already know and FINISH — do NOT escalate to research_tool for internal questions.
+6. If any tool returns "timed out" or "Error", do NOT retry the same tool. Summarize what you have and FINISH.
+7. When a task mentions "from step_N" or "using step_N output", that refers to context from a previous agent — do NOT search for files named 'step_1'.
+8. BUILD FULL PATHS — use {workspace}/subfolder/filename as the path. Do NOT list_dir from D:/ or other root dirs.
+9. Keep responses SHORT. When done, respond with a plain-text summary (no tool calls).
 """
 
 
@@ -48,6 +58,8 @@ def _get_tool_map():
         "research_tool": t.research_tool,
         "browser_tool": t.browser_tool,
         "memory_tool": t.memory_tool,
+        "file_ops_tool": t.file_ops_tool,
+        "coding_tool": t.coding_tool,
     }
 
 
@@ -102,10 +114,10 @@ async def _llm_invoke_safe(llm, messages):
 async def researcher_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """Research agent — gathers information via multi-turn tool loop."""
     from agent.core.llm_provider import get_llm_with_tools
-    from agent.graph.tools import research_tool, browser_tool, memory_tool
+    from agent.graph.tools import research_tool, browser_tool, memory_tool, file_ops_tool, coding_tool
 
     app_config = config.get("configurable", {}).get("app_config", {})
-    tools = [research_tool, browser_tool, memory_tool]
+    tools = [research_tool, browser_tool, memory_tool, file_ops_tool, coding_tool]
 
     try:
         llm = get_llm_with_tools(app_config, tools)
@@ -130,7 +142,7 @@ async def researcher_node(state: AgentState, config: RunnableConfig) -> Dict[str
         user_content += f"\n\nCONTEXT:\n{memory_ctx[:500]}"
 
     messages = [
-        SystemMessage(content=RESEARCHER_PROMPT),
+        SystemMessage(content=RESEARCHER_PROMPT.format(workspace=WORKSPACE_ROOT)),
         HumanMessage(content=user_content),
     ]
 

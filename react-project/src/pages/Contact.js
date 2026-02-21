@@ -1,0 +1,1 @@
+import React from 'react';\n\nconst Contact = () => {\n  return (\n    <div>\n      <h1>Contact Us</h1>\n      <p>Get in touch with us.</p>\n    </div>\n  );\n};\n\nexport default Contact;

@@ -5,6 +5,7 @@ export function registerInlineCompletionProvider(editor: monaco.editor.IStandalo
     const provider = monaco.languages.registerInlineCompletionsProvider('*', {
         provideInlineCompletions: async (model, position, context, token) => {
             try {
+                if (token?.isCancellationRequested) return { items: [] };
                 // Simple debounce happens naturally by network latency + user typing speed
                 // For production, a real debouncer wrapper is better, but this works for proof of concept
                 const response = await fetch('http://localhost:8000/api/copilot/suggest', {
@@ -22,7 +23,11 @@ export function registerInlineCompletionProvider(editor: monaco.editor.IStandalo
 
                 if (!response.ok) return { items: [] };
 
+                if (token?.isCancellationRequested) return { items: [] };
+
                 const data = await response.json();
+
+                if (token?.isCancellationRequested) return { items: [] };
 
                 if (data.suggestions && data.suggestions.length > 0) {
                     const text = data.suggestions[0].text;
@@ -44,8 +49,9 @@ export function registerInlineCompletionProvider(editor: monaco.editor.IStandalo
 
             return { items: [] };
         },
-        freeInlineCompletions: () => { },
-        disposeInlineCompletions: () => { }
+        disposeInlineCompletions: () => {
+            // No resources to dispose.
+        }
     });
 
     return provider;

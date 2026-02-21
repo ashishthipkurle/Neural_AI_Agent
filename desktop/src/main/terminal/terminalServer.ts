@@ -77,6 +77,16 @@ export class TerminalWebSocketServer {
                     return
                 }
 
+                // Handle CWD change command from frontend
+                if (data.startsWith('CWD:')) {
+                    const newCwd = data.slice(4).trim()
+                    if (newCwd) {
+                        // Send a cd command to the shell
+                        ptyProcess.write(`cd "${newCwd}"\r`)
+                    }
+                    return
+                }
+
                 ptyProcess.write(data)
             })
 

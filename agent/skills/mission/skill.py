@@ -252,25 +252,31 @@ class MissionControlSkill(BaseSkill):
         # Report final result if available
         final_msg = f"Mission Complete: {goal}"
         if previous_result:
-            # Case 1: Result has a report file (e.g. Deep Research)
+            # Case 1: Result has a report file (e.g. Deep Research, Browser Chat)
             if isinstance(previous_result, dict) and "report_path" in previous_result:
                 report_path = previous_result["report_path"]
-                summary = previous_result.get("summary", "Research completed.")
+                summary = previous_result.get("summary", previous_result.get("content", "Research completed."))
+                if isinstance(summary, str) and len(summary) > 300:
+                    summary = summary[:300] + "..."
                 
                 # Send summary first
                 await self._report(f"{final_msg}\n\nSummary: {summary}\n\nSending full report...")
                 
+                # Try to convert to PDF before sending
+                pdf_path = await self._render_md_to_pdf(report_path)
+                send_path = pdf_path if pdf_path else report_path
+                
                 # Send the file
                 try:
                     await self._call_skill("telegram", "send_document", {
-                        "path": report_path,
+                        "path": send_path,
                         "caption": f"Mission Report: {goal}"
                     })
                     _emit_done()
                     return SkillResult(success=True, message="Mission Complete (Report sent)")
                 except Exception as e:
                     self.logger.error(f"Failed to send report file: {e}")
-                    final_msg += f"\n\n(Failed to send report file: {e}. Path: {report_path})"
+                    final_msg += f"\n\n(Failed to send report file: {e}. Path: {send_path})"
 
             # Case 2: Result has direct content
             elif isinstance(previous_result, dict) and "content" in previous_result:
@@ -288,21 +294,25 @@ class MissionControlSkill(BaseSkill):
                         mission_dir.mkdir(parents=True, exist_ok=True)
                         
                         timestamp = int(time.time())
-                        filename = f"mission_report_{timestamp}.md"
-                        file_path = mission_dir / filename
+                        md_filename = f"mission_report_{timestamp}.md"
+                        md_path = mission_dir / md_filename
                         
                         # Add header
                         file_content = f"# Mission Report: {goal}\n\n"
                         file_content += f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                         file_content += content
                         
-                        with open(file_path, "w", encoding="utf-8") as f:
+                        with open(md_path, "w", encoding="utf-8") as f:
                             f.write(file_content)
+                        
+                        # Try to convert to PDF
+                        pdf_path = await self._render_md_to_pdf(str(md_path))
+                        send_path = pdf_path if pdf_path else str(md_path)
                             
                         # Send document
-                        await self._report(f"Mission complete. Result is too long for text, sending file: {filename}")
+                        await self._report(f"Mission complete. Sending report...")
                         await self._call_skill("telegram", "send_document", {
-                            "path": str(file_path),
+                            "path": send_path,
                             "caption": f"Mission Report: {goal}"
                         })
                         _emit_done()
@@ -352,6 +362,63 @@ class MissionControlSkill(BaseSkill):
              return SkillResult(success=False, error=f"Router cannot execute {skill_name}.{action}")
         except Exception as e:
              return SkillResult(success=False, error=f"Call failed: {e}")
+
+    async def _render_md_to_pdf(self, md_path: str) -> Optional[str]:
+        """Convert a Markdown report file to PDF using Playwright async API.
+        
+        Returns the PDF path on success, or None on failure (caller should fall back to .md).
+        """
+        import os
+        if not os.path.exists(md_path):
+            self.logger.warning(f"MD file not found for PDF render: {md_path}")
+            return None
+
+        try:
+            import markdown
+        except ImportError:
+            self.logger.warning("python-markdown not installed; sending .md as-is.")
+            return None
+
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                md_text = f.read()
+
+            html_body = markdown.markdown(
+                md_text,
+                extensions=["tables", "fenced_code", "codehilite", "toc"],
+            )
+            full_html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #222; line-height: 1.6; }}
+h1 {{ color: #1a237e; border-bottom: 2px solid #1a237e; padding-bottom: 8px; }}
+h2 {{ color: #283593; margin-top: 28px; }}
+h3 {{ color: #3949ab; }}
+table {{ border-collapse: collapse; width: 100%; margin: 16px 0; }}
+th, td {{ border: 1px solid #bbb; padding: 8px 12px; text-align: left; }}
+th {{ background: #e8eaf6; }}
+tr:nth-child(even) {{ background: #f5f5f5; }}
+pre {{ background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }}
+code {{ background: #f0f0f0; padding: 2px 4px; border-radius: 3px; }}
+blockquote {{ border-left: 4px solid #7986cb; margin: 12px 0; padding: 8px 16px; background: #f9f9ff; }}
+</style></head><body>{html_body}</body></html>"""
+
+            pdf_path = md_path.rsplit(".", 1)[0] + ".pdf"
+
+            from playwright.async_api import async_playwright
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.set_content(full_html, wait_until="networkidle")
+                await page.pdf(path=pdf_path, format="A4", margin={"top": "20mm", "bottom": "20mm", "left": "15mm", "right": "15mm"}, print_background=True)
+                await browser.close()
+
+            self.logger.info(f"Mission report rendered to PDF: {pdf_path}")
+            return pdf_path
+
+        except Exception as exc:
+            self.logger.error(f"PDF render failed, falling back to .md: {exc}")
+            return None
 
     async def _report(self, message: str, silent: bool = False) -> None:
         """Send update to live UI + Telegram (Telegram can be silenced)."""

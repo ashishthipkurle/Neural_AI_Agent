@@ -36,6 +36,7 @@ const webAPI: Partial<ElectronAPI> = {
         onNewFile: () => { },
         onOpenFolder: () => { },
         onSave: () => { },
+        onToggleCodeEditor: () => { },
         onToggleTerminal: () => { },
         onNewTerminal: () => { }
     }

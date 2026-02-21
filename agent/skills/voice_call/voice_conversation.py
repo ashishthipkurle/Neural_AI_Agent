@@ -60,6 +60,7 @@ class VoiceConversationManager:
 
     def __init__(self):
         self.conversations: Dict[str, CallConversation] = {}
+        self.call_sources: Dict[str, str] = {}   # call_sid -> source ("local" | "telegram:<chat_id>")
         self.logger = logging.getLogger("VoiceConversation")
 
     def create_conversation(self, call_sid: str, purpose: str, 
@@ -91,6 +92,7 @@ class VoiceConversationManager:
                    if now - c.created_at > max_age_seconds]
         for sid in expired:
             del self.conversations[sid]
+            self.call_sources.pop(sid, None)
 
     def generate_greeting_prompt(self, conv: CallConversation) -> str:
         """Build the opening greeting for the call."""

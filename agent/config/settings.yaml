@@ -10,11 +10,12 @@ llm:
   provider: "ollama"
   # Models supported by this workspace (used by the UI model selector via request override)
   available_models:
+    - "qwen3-coder:480b-cloud"
     - "gpt-oss:120b-cloud"
     - "kimi-k2.5:cloud"
-  # Unified model for text/code tasks (Cloud connection required)
-  model_name: "gpt-oss:120b-cloud"
-  # Vision model kept for image analysis (gpt-oss is text-only)
+  # Primary model for all text/code tasks (qwen3-coder is text-only — Cloud connection required)
+  model_name: "qwen3-coder:480b-cloud"
+  # Vision model: qwen3-coder is text-only, keep gpt-oss:120b-cloud for image analysis
   vision_model: "gpt-oss:120b-cloud"
   api_key: "ollama"
 
@@ -102,6 +103,7 @@ telegram:
   bot_token: "${TELEGRAM_TOKEN}"
   chat_id: "${TELEGRAM_CHAT_ID}"
   allowed_users: ["${TELEGRAM_CHAT_ID}"]
+  report_format: "pdf"  # md|pdf|both
 
 browser:
   headless: false

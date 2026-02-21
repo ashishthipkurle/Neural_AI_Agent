@@ -170,6 +170,12 @@ class SupervisorController:
         error = state.get("error")
         if not error:
             return None
+        # Critic review errors are quality feedback about task content,
+        # NOT actual system failures. Skip classification to prevent
+        # task-content keywords (e.g. "corrupt", "invalid") from
+        # triggering false STATE_CORRUPTION escalation.
+        if str(error).startswith("Critic flagged"):
+            return None
         return classify_failure(error)
 
     # ── §2: switch_strategy ──

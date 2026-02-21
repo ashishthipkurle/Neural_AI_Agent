@@ -1,0 +1,1 @@
+import React from 'react';\n\nconst About = () => {\n  return (\n    <div>\n      <h1>About Us</h1>\n      <p>Learn more about our company.</p>\n    </div>\n  );\n};\n\nexport default About;

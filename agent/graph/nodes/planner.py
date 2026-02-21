@@ -83,6 +83,71 @@ async def planner_node(state: AgentState, config: RunnableConfig) -> Dict[str, A
     intent = state.get("intent", {})
     goal = state.get("goal", "")
 
+    # Fast-path for Telegram requests: keep plans small to reduce latency.
+    # For common "research + summary" tasks, a 3-step plan is sufficient.
+    try:
+        source = (
+            (state.get("metadata", {}) or {}).get("source")
+            or (state.get("world_state", {}) or {}).get("user_context", {}).get("source")
+            or "local"
+        )
+    except Exception:
+        source = "local"
+
+    objective_text = str(intent.get("objective") or goal or "").lower()
+    if str(source).startswith("telegram") and any(k in objective_text for k in ("research", "summary", "summarize", "write a summary")):
+        plan_data = {
+            "nodes": [
+                {
+                    "id": "step_1",
+                    "task": f"Research the request and gather key facts for: {intent.get('objective', goal)}",
+                    "agent": "researcher",
+                    "tools": ["research_tool", "memory_tool"],
+                    "risk": "low",
+                    "validation": "Have 3-6 key facts/sources to support the summary.",
+                    "depends_on": [],
+                    "status": "pending",
+                },
+                {
+                    "id": "step_2",
+                    "task": "Draft the final user-facing summary (deliverable).",
+                    "agent": "coder",
+                    "tools": [],
+                    "risk": "low",
+                    "validation": "Summary is complete and readable.",
+                    "depends_on": ["step_1"],
+                    "status": "pending",
+                },
+                {
+                    "id": "step_3",
+                    "task": "Review the draft for correctness and clarity and request revisions if needed.",
+                    "agent": "critic",
+                    "tools": [],
+                    "risk": "low",
+                    "validation": "Critic approves the draft.",
+                    "depends_on": ["step_2"],
+                    "status": "pending",
+                },
+            ],
+            "edges": [["step_1", "step_2"], ["step_2", "step_3"]],
+        }
+
+        first_subgoal = plan_data["nodes"][0]["id"]
+        logger.info(f"Plan created: {len(plan_data['nodes'])} subgoals (telegram fast-path)")
+        return {
+            "plan_graph": plan_data,
+            "current_subgoal": first_subgoal,
+            "current_subgoal_index": 0,
+            "messages": [AIMessage(content=f"Plan created with {len(plan_data['nodes'])} steps.")],
+            "audit_log": [{
+                "node": "planner",
+                "action": "create_plan_fast",
+                "subgoals": len(plan_data["nodes"]),
+                "source": source,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }],
+        }
+
     user_content = f"OBJECTIVE: {intent.get('objective', goal)}\n"
     if intent.get("constraints"):
         user_content += f"CONSTRAINTS: {json.dumps(intent['constraints'])}\n"
@@ -110,7 +175,7 @@ async def planner_node(state: AgentState, config: RunnableConfig) -> Dict[str, A
         text = response.content.strip()
         logger.info(f"✓ Planner: LLM response received ({len(text)} chars)")
 
-        plan_data = json.loads(text)
+        plan_data = _parse_plan_json(text)
         if not isinstance(plan_data, dict) or "nodes" not in plan_data:
             raise ValueError("Invalid plan structure")
 
@@ -167,6 +232,49 @@ async def planner_node(state: AgentState, config: RunnableConfig) -> Dict[str, A
         }],
     }
 
+
+def _parse_plan_json(text: str) -> Dict[str, Any]:
+    """Parse plan JSON with repair for common LLM formatting errors."""
+    import re as _re
+
+    # 1. Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Strip markdown code fences (```json ... ```)
+    stripped = _re.sub(r"^```(?:json)?\s*\n?", "", text, flags=_re.MULTILINE)
+    stripped = _re.sub(r"\n?```\s*$", "", stripped, flags=_re.MULTILINE).strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    # 3. Fix trailing commas before ] or }
+    fixed = _re.sub(r",\s*([\]}])", r"\1", stripped)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # 4. Extract JSON object substring from mixed text
+    match = _re.search(r"\{.*\}", fixed, flags=_re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # 5. Fix single-quoted strings → double-quoted
+    dq = fixed.replace("'", '"')
+    try:
+        return json.loads(dq)
+    except json.JSONDecodeError:
+        pass
+
+    # 6. Nothing worked — raise so fallback kicks in
+    raise ValueError(f"Could not parse plan JSON after repair attempts ({len(text)} chars)")
 
 def _find_next_subgoal(nodes: List[Dict[str, Any]]) -> Dict[str, Any] | None:
     """Find next pending subgoal with all dependencies met."""

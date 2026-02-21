@@ -1,0 +1,1 @@
+import React from 'react';\n\nconst Home = () => {\n  return (\n    <div>\n      <h1>Welcome to Our Website</h1>\n      <p>This is the homepage.</p>\n    </div>\n  );\n};\n\nexport default Home;

@@ -133,9 +133,16 @@ def _auto_route_model(
 
     # If not explicitly configured, try to infer from available_models.
     if not complex_model:
+        # Prefer qwen3-coder as the complex/primary model
         complex_model = _pick_from_available_models(
             available_models,
-            lambda m: "gpt-oss:120b" in m or m.strip() == "gpt-oss:120b-cloud",
+            lambda m: "qwen3-coder" in m.lower(),
+        )
+    if not complex_model:
+        # Fall back to gpt-oss as a strong secondary option
+        complex_model = _pick_from_available_models(
+            available_models,
+            lambda m: "gpt-oss:120b" in m,
         )
     if not configured_simple and available_models:
         # Prefer Kimi for "simple" if present.
@@ -155,6 +162,8 @@ def _auto_route_model(
 
     if kind == "refactor":
         score += 6
+    elif kind == "explain":
+        score += 4  # use a capable model for explanations
     elif kind == "suggest":
         score -= 3  # bias toward fast/cheap for inline suggestions
 
@@ -557,7 +566,7 @@ async def generate_code(request: ChatRequest):
         # 1) request.model_name (explicit UI selection)
         # 2) if image is present -> vision_model
         # 3) AUTO (no model_name) -> smart routing by complexity
-        fallback_model = "gpt-oss:120b-cloud"
+        fallback_model = "qwen3-coder:480b-cloud"
         if request.model_name and request.model_name.strip():
             coding_model = request.model_name.strip()
         elif request.image:
@@ -617,7 +626,7 @@ async def generate_code(request: ChatRequest):
         logger.error(f"❌ Code generation error: {e}")
         logger.error(traceback.format_exc())
         return ChatResponse(
-            response=f"Code generation failed: {str(e) or 'Unknown error'}. Make sure Ollama is running and the model is installed (e.g. ollama pull gpt-oss:120b-cloud or ollama pull kimi-k2.5:cloud).",
+            response=f"Code generation failed: {str(e) or 'Unknown error'}. Make sure Ollama is running and the model is installed (e.g. ollama pull qwen3-coder:480b-cloud or ollama pull gpt-oss:120b-cloud).",
             status="error",
             action_taken=None
         )
@@ -825,12 +834,12 @@ intent_classifier = CodingIntentClassifier()
 
 class CopilotRequest(BaseModel):
     file_content: str
-    cursor_line: int
-    cursor_column: int # 1-based
-    language: str
+    cursor_line: int = 1
+    cursor_column: int = 1  # 1-based
+    language: str = "plaintext"
     file_path: Optional[str] = None
     selection: Optional[str] = None
-    user_input: Optional[str] = None # Instructions or questions
+    user_input: Optional[str] = None  # Instructions or questions
     model_name: Optional[str] = None
 
 class CopilotResponse(BaseModel):
@@ -866,7 +875,7 @@ async def copilot_suggest(request: CopilotRequest):
     # Here we assume this endpoint is called automatically by cursor movement (debounce).
     
     llm_config = _get_llm_config()
-    fallback_model = "gpt-oss:120b-cloud"
+    fallback_model = "qwen3-coder:480b-cloud"
     if request.model_name and request.model_name.strip():
         coding_model = request.model_name.strip()
     else:
@@ -947,7 +956,7 @@ async def copilot_refactor(request: CopilotRequest):
     instruction = request.user_input
     
     llm_config = _get_llm_config()
-    fallback_model = "gpt-oss:120b-cloud"
+    fallback_model = "qwen3-coder:480b-cloud"
     if request.model_name and request.model_name.strip():
         coding_model = request.model_name.strip()
     else:
@@ -971,7 +980,7 @@ Return ONLY the code block with the refactored code. Do not explain.
 """
     import httpx
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:  # 5 min — large models (480B) can be slow
              response = await client.post(
                 "http://localhost:11434/api/generate",
                 json={
@@ -985,9 +994,9 @@ Return ONLY the code block with the refactored code. Do not explain.
                  new_code = response.json().get("response", "")
                  # Extract code block
                  import re
-                 match = re.search(r"```(?:\w+)?\\n(.*?)```", new_code, re.DOTALL)
+                 match = re.search(r"```(?:\w+)?\n(.*?)```", new_code, re.DOTALL)
                  if match:
-                     new_code = match.group(1)
+                     new_code = match.group(1).strip()
                  
                  # Create simple diff or just return new content as proposal
                  # For simplicity in this iteration, we propose REPLACING the selection or file
@@ -1006,11 +1015,11 @@ Return ONLY the code block with the refactored code. Do not explain.
                  # Reconstruct full content
                  full_content = request.file_content
                  if request.selection and request.selection in full_content:
-                     full_content = full_content.replace(request.selection, new_code)
+                     full_content = full_content.replace(request.selection, new_code, 1)
                  else:
-                     # Fallback if selection tracking is fuzzy, just use new code if it looks like full file
-                     # Or fail safe
-                     pass
+                     # Fallback: if selection doesn't match or was the whole file,
+                     # treat the LLM output as the new full file content.
+                     full_content = new_code
                  
                  pid = file_guard.create_proposal("modify", request.file_path, full_content)
                  
@@ -1028,9 +1037,12 @@ Return ONLY the code block with the refactored code. Do not explain.
                      proposal_id=pid,
                      intent="refactor_file"
                  )
+    except httpx.TimeoutException:
+        logger.error("Refactor timed out (model took >300s)")
+        raise HTTPException(504, "Refactor timed out. The model is taking too long — try selecting a smaller code block or use a faster model.")
     except Exception as e:
         logger.error(f"Refactor failed: {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e) or "Refactor failed (unknown error)")
         
     return CopilotResponse(intent="failed")
 
@@ -1038,12 +1050,64 @@ Return ONLY the code block with the refactored code. Do not explain.
 async def copilot_explain(request: CopilotRequest):
     """Explain code. Read-only."""
     context_code = request.selection or request.file_content
-    
-    prompt = f"Explain this code:\\n```\\n{context_code}\\n```"
-    
-    # Call LLM ... (omitted for brevity, similar pattern)
-    # Mock for speed or call real LLM
-    return CopilotResponse(explanation="This functionality is under construction.", intent="explain_code")
+    if not context_code:
+        return CopilotResponse(explanation="No code provided to explain.", intent="explain_code")
+
+    llm_config = _get_llm_config()
+    fallback_model = "qwen3-coder:480b-cloud"
+    if request.model_name and request.model_name.strip():
+        coding_model = request.model_name.strip()
+    else:
+        coding_model = _auto_route_model(
+            llm_config=llm_config,
+            text=context_code,
+            kind="explain",
+            fallback_model=llm_config.get("model_name") or fallback_model,
+        )
+
+    prompt = f"""You are an expert code reviewer. Explain the following code clearly and concisely.
+
+Code:
+```
+{context_code}
+```
+
+Provide:
+1. A high-level summary of what this code does
+2. Key components and their roles
+3. Any notable patterns, potential issues, or improvements
+
+Be clear, structured, and helpful."""
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": coding_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.3}
+                }
+            )
+            if response.status_code == 200:
+                explanation = response.json().get("response", "").strip()
+                if explanation:
+                    return CopilotResponse(explanation=explanation, intent="explain_code")
+                return CopilotResponse(explanation="Model returned an empty response.", intent="explain_code")
+            else:
+                error_detail = response.text[:200]
+                logger.error(f"Explain: Ollama returned {response.status_code}: {error_detail}")
+                return CopilotResponse(
+                    explanation=f"Ollama returned status {response.status_code}. Make sure model '{coding_model}' is available (run: ollama pull {coding_model}).",
+                    intent="explain_code"
+                )
+    except Exception as e:
+        logger.error(f"Explain failed: {e}")
+        return CopilotResponse(explanation=f"Explain failed: {str(e)}", intent="explain_code")
+
+    return CopilotResponse(explanation="Could not generate explanation.", intent="explain_code")
 
 
 @app.post("/api/copilot/apply-diff")
@@ -1400,14 +1464,60 @@ async def voice_status_callback(request: Request):
     logger.info(f"[Voice] Call status update: SID={call_sid}, status={call_status}")
     print(f"!!! VOICE WEBHOOK HIT: /voice/status?call_sid={call_sid}&status={call_status} !!!")
     
-    # Clean up conversation state
+    # Clean up conversation state and deliver post-call summary
     from agent.skills.voice_call.voice_conversation import conversation_manager
     if call_status in ["completed", "failed", "no-answer", "busy"]:
         conv = conversation_manager.get_conversation(str(call_sid))
         if conv:
-            logger.info(f"[Voice] Final transcript for {call_sid}: {conv.build_history_text()}")
+            transcript = conv.build_history_text()
+            logger.info(f"[Voice] Final transcript for {call_sid}: {transcript}")
+
+            # ── Build & deliver post-call summary ──
+            if call_status == "completed" and transcript:
+                summary = (
+                    f"\U0001F4DE **Call completed** with {conv.contact_name}\n"
+                    f"**Purpose:** {conv.purpose}\n\n"
+                    f"**Conversation:**\n{transcript}"
+                )
+            else:
+                status_text = call_status.replace('-', ' ')
+                summary = f"\U0001F4DE Call to {conv.contact_name}: {status_text}."
+
+            # 1) Broadcast to WebSocket (chat UI)
+            try:
+                await broadcast_event("assistant", "assistant", summary)
+                await broadcast_event("status", "system", "Done")
+                logger.info(f"[Voice] Call summary broadcast to chat UI for {call_sid}")
+            except Exception as e:
+                logger.error(f"[Voice] Failed to broadcast call summary: {e}")
+
+            # 2) Save to chat history
+            if agent and hasattr(agent, '_history_manager') and agent._history_manager:
+                try:
+                    conv_id = getattr(agent, 'active_conversation_id', None)
+                    if conv_id:
+                        agent._history_manager.add_message(conv_id, "assistant", summary)
+                except Exception as e:
+                    logger.error(f"[Voice] Failed to save call summary to history: {e}")
+
+            # 3) Send to Telegram if the call was initiated from Telegram
+            source = conversation_manager.call_sources.get(str(call_sid), "local")
+            if source.startswith("telegram:") and agent:
+                try:
+                    chat_id = source.split(":", 1)[1]
+                    if hasattr(agent, '_skill_router') and agent._skill_router:
+                        await agent._skill_router.execute_skill_action(
+                            "telegram", "send_message",
+                            {"text": summary, "chat_id": chat_id}
+                        )
+                        logger.info(f"[Voice] Call summary sent to Telegram chat {chat_id}")
+                except Exception as e:
+                    logger.error(f"[Voice] Failed to send call summary to Telegram: {e}")
+
+            # Cleanup
+            conversation_manager.call_sources.pop(str(call_sid), None)
             conversation_manager.end_conversation(str(call_sid))
-    
+
     return {"status": "ok"}
 
 
