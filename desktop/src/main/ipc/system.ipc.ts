@@ -78,4 +78,53 @@ export function registerSystemHandlers(ipcMain: IpcMain, mainWindow: BrowserWind
             await shell.openExternal(url)
         }
     })
+
+    ipcMain.removeHandler('system:captureWebview')
+    ipcMain.handle('system:captureWebview', async (event) => {
+        // Get the webContents of the window that sent the IPC message
+        const senderWebContents = event.sender
+
+        // The webview is hosted within this window. We can iterate over all webContents
+        // and find the one that corresponds to the webview (guest).
+        const { webContents } = require('electron')
+        const allWebContents = webContents.getAllWebContents()
+
+        // Find a webContents that is a guest (webview) and belongs to our mainWindow
+        // In this app architecture there is only one webview.
+        const guestContents = allWebContents.find((wc: Electron.WebContents) => wc.getType() === 'webview')
+
+        console.log('System IPC: Handling system:captureWebview request...');
+        if (!guestContents) {
+            console.error('System IPC: No webview guest found to capture.');
+            return null;
+        }
+
+        try {
+            console.log(`System IPC: Capturing guest webContents ID: ${guestContents.id}`);
+
+            // Wrap in a Promise.race to prevent indefinite hangs
+            const capturePromise = guestContents.capturePage()
+            const timeoutPromise = new Promise<null>((resolve) => {
+                setTimeout(() => {
+                    console.error('System IPC: capturePage timed out after 10 seconds');
+                    resolve(null);
+                }, 10000);
+            });
+
+            const nativeImage = await Promise.race([capturePromise, timeoutPromise]);
+
+            if (!nativeImage) {
+                return null; // Timed out or failed
+            }
+
+            console.log('System IPC: Capture successful. Converting to Data URL...');
+            const dataUrl = nativeImage.toDataURL();
+            // Truncate for logging
+            console.log(`System IPC: Data URL generated. Length: ${dataUrl.length}`);
+            return dataUrl;
+        } catch (err) {
+            console.error('System IPC: Failed to capture webview:', err)
+            return null
+        }
+    })
 }

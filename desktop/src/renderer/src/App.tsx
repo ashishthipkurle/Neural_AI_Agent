@@ -1,7 +1,5 @@
-"use client";
-
 import React, { useState, useEffect, useRef } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
     Mic,
     MicOff,
@@ -24,12 +22,14 @@ import {
     MessageSquare,
     Camera,
     Trash2,
+    LineChart
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AIGlobe from "./components/AIGlobe";
 import CodeEditorView from "./components/CodeEditor/CodeEditorView";
 import Dashboard from "./components/Dashboard/Dashboard";
+import TradingView from "./components/Dashboard/TradingView";
 import { api } from "./lib/api";
 
 /* ================= TYPES ================= */
@@ -497,6 +497,8 @@ interface CommandFeedProps {
     onToggleCamera: () => void;
     onToggleCCTV: () => void;
     onToggleDashboard: () => void;
+    onToggleTrading: () => void;
+
     liveFeedMode: "idle" | "camera" | "cctv";
 }
 
@@ -511,6 +513,7 @@ function CommandFeed({
     onToggleCamera,
     onToggleCCTV,
     onToggleDashboard,
+    onToggleTrading,
     liveFeedMode
 }: CommandFeedProps) {
     const [input, setInput] = useState("");
@@ -568,6 +571,14 @@ function CommandFeed({
                     >
                         <Settings size={16} />
                         <span className="text-xs font-mono tracking-wide">Dashboard</span>
+                    </button>
+                    <button
+                        onClick={onToggleTrading}
+                        className="px-3 py-2 rounded-lg border border-cyan-500/30 bg-cyan-900/20 hover:bg-cyan-900/40 text-cyan-300 transition-colors flex items-center gap-2"
+                        title="Open Trading Terminal"
+                    >
+                        <LineChart size={16} />
+                        <span className="text-xs font-mono tracking-wide">Trading</span>
                     </button>
                 </div>
             </div>
@@ -940,6 +951,8 @@ function LiveFeedPanel({ mode = "idle", videoRef }: LiveFeedPanelProps) {
 export default function NeuralInterface() {
     const [aiState, setAiState] = useState<AIState>("idle");
     const [liveFeedMode, setLiveFeedMode] = useState<"idle" | "camera" | "cctv">("idle"); // State for live feed
+    const [showTradingPanel, setShowTradingPanel] = useState(false);
+
     const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([
         {
@@ -1584,6 +1597,12 @@ export default function NeuralInterface() {
                     initialProjectPath={codeEditorProjectPath}
                 />
             )}
+
+            {/* TRADING FULL-SCREEN OVERLAY */}
+            {showTradingPanel && (
+                <TradingView onClose={() => setShowTradingPanel(false)} />
+            )}
+
             <Dashboard isOpen={showDashboard} onClose={() => setShowDashboard(false)} />
             <div className="min-h-screen relative overflow-hidden bg-[#050505]">
                 <GeometricBackground />
@@ -1627,13 +1646,14 @@ export default function NeuralInterface() {
                                     onToggleCCTV={() => setLiveFeedMode(p => p === 'cctv' ? 'idle' : 'cctv')}
                                     liveFeedMode={liveFeedMode}
                                     onToggleDashboard={() => setShowDashboard(true)}
+                                    onToggleTrading={() => setShowTradingPanel(p => !p)}
                                 />
                             );
                         })()}
                     </div>
                 </div>
 
-                {/* RIGHT EDGE - Live Feed Panel (Medium Width) */}
+                {/* RIGHT EDGE - Live Feed Panel or Trading Panel (Medium Width) */}
                 <div className="fixed right-0 top-14 bottom-0 z-20 w-[480px] p-4">
                     <div className="h-full">
                         <LiveFeedPanel mode={liveFeedMode} videoRef={videoRef} />

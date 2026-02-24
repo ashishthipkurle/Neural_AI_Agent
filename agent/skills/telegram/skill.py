@@ -212,7 +212,13 @@ class TelegramSkill(BaseSkill):
         await self._relay_to_agent(update, text)
 
     async def _relay_to_agent(self, update: Update, text: str):
-        """Common logic to send text to agent."""
+        """Common logic to send text to agent.
+
+        Intelligently classifies incoming messages:
+        - Simple questions (who, what, when, etc.) → direct text reply, no mission overhead.
+        - Complex tasks (make, create, build, research, go to, etc.) → full mission flow with
+          progress banner and PDF report.
+        """
         user_id = update.effective_user.id
         
         # Security check: only allow main chat_id if configured
@@ -221,76 +227,195 @@ class TelegramSkill(BaseSkill):
              # await update.message.reply_text("⛔ Unauthorized.")
              # return
 
-        if self.agent:
-            # Indicate processing
-            await update.message.chat.send_action(action="typing")
+        if not self.agent:
+            await update.message.reply_text("⚠ Agent not linked. Cannot process message.")
+            return
 
-            reply_mode = (self.config.get("telegram", {}) or {}).get("reply_mode", "auto")  # auto|file|text|both
-            send_progress = bool((self.config.get("telegram", {}) or {}).get("progress_updates", True))
+        # Indicate processing
+        await update.message.chat.send_action(action="typing")
 
-            chat_id = str(update.effective_chat.id) if update and update.effective_chat else ""
-            docs_before = self._sent_document_counter.get(chat_id, 0)
+        reply_mode = (self.config.get("telegram", {}) or {}).get("reply_mode", "auto")  # auto|file|text|both
+        send_progress = bool((self.config.get("telegram", {}) or {}).get("progress_updates", True))
 
-            # Immediate acknowledgement (so user knows the mission is running)
-            if send_progress:
-                preview = (text or "").strip().replace("\n", " ")
-                if len(preview) > 160:
-                    preview = preview[:160] + "…"
-                await update.message.reply_text(
-                    "🟡 Mission in progress\n"
-                    f"Task: {preview}\n\n"
-                    "I’ll send a report file when it’s done."
-                )
+        chat_id = str(update.effective_chat.id) if update and update.effective_chat else ""
+        docs_before = self._sent_document_counter.get(chat_id, 0)
 
-            # Route to agent
+        # ── Classify: simple question vs complex task ──
+        is_simple = self._is_simple_question(text)
+
+        if is_simple:
+            # ── SIMPLE PATH: direct text reply, no mission overhead ──
             try:
+                # Show a loading indicator so user knows the agent is working
+                thinking_msg = await update.message.reply_text("⏳ Thinking...")
+
                 chat_src = f"telegram:{update.effective_chat.id}" if update and update.effective_chat else "telegram"
                 response = await self.agent.process_input(text, source=chat_src)
 
-                docs_after = self._sent_document_counter.get(chat_id, 0)
-                mission_sent_doc = docs_after > docs_before
-
-                # If a mission already sent a document while handling this request, do NOT duplicate.
-                if mission_sent_doc or self._looks_like_mission_already_reported(response):
-                    if send_progress:
-                        await update.message.reply_text("✅ Mission completed. Report sent.")
-                    return
-
-                if reply_mode in ("text", "both"):
-                    # Keep inline replies short to avoid Telegram spam
-                    inline = (response or "").strip()
-                    if len(inline) > 3500:
-                        inline = inline[:3500] + "…"
-                    if inline:
+                inline = (response or "").strip()
+                if len(inline) > 3500:
+                    inline = inline[:3500] + "…"
+                if inline:
+                    # Edit the "Thinking..." message into the actual answer
+                    try:
+                        await thinking_msg.edit_text(inline)
+                    except Exception:
+                        # If edit fails (e.g. same content), send as new message
+                        await thinking_msg.delete()
                         await update.message.reply_text(inline)
-
-                sent_own_report = False
-                if reply_mode in ("auto", "file", "both"):
-                    report_path = await self._write_report_file_async(request_text=text, response_text=response)
-                    caption = f"Mission Report: {text[:60].strip()}" if text else "Mission Report"
-                    with open(report_path, "rb") as f:
-                        await self.bot.send_document(
-                            chat_id=update.effective_chat.id,
-                            document=f,
-                            caption=caption,
-                        )
-                    sent_own_report = True
-
-                if send_progress:
-                    if sent_own_report:
-                        snippet = (response or "").strip().replace("\n", " ")
-                        if len(snippet) > 220:
-                            snippet = snippet[:220] + "…"
-                        summary_line = f"\nSummary: {snippet}" if snippet else ""
-                        await update.message.reply_text(f"✅ Mission completed. Report file sent.{summary_line}")
-                    else:
-                        await update.message.reply_text("✅ Mission completed.")
+                else:
+                    await thinking_msg.edit_text("I couldn't find an answer to that.")
 
             except Exception as e:
                 self.logger.error(f"Agent processing failed: {e}")
-                await update.message.reply_text(f"❌ Error: {str(e)}")
-        else:
-            await update.message.reply_text("⚠ Agent not linked. Cannot process message.")
+                try:
+                    await thinking_msg.edit_text(f"❌ Error: {str(e)}")
+                except Exception:
+                    await update.message.reply_text(f"❌ Error: {str(e)}")
+            return
+
+        # ── MISSION PATH: full progress + report ──
+        # Immediate acknowledgement (so user knows the mission is running)
+        if send_progress:
+            preview = (text or "").strip().replace("\n", " ")
+            if len(preview) > 160:
+                preview = preview[:160] + "…"
+            await update.message.reply_text(
+                "🟡 Mission in progress\n"
+                f"Task: {preview}\n\n"
+                "I'll send a report file when it's done."
+            )
+
+        # Route to agent
+        try:
+            chat_src = f"telegram:{update.effective_chat.id}" if update and update.effective_chat else "telegram"
+            response = await self.agent.process_input(text, source=chat_src)
+
+            docs_after = self._sent_document_counter.get(chat_id, 0)
+            mission_sent_doc = docs_after > docs_before
+
+            # If a mission already sent a document while handling this request, do NOT duplicate.
+            if mission_sent_doc or self._looks_like_mission_already_reported(response):
+                if send_progress:
+                    await update.message.reply_text("✅ Mission completed. Report sent.")
+                return
+
+            if reply_mode in ("text", "both"):
+                # Keep inline replies short to avoid Telegram spam
+                inline = (response or "").strip()
+                if len(inline) > 3500:
+                    inline = inline[:3500] + "…"
+                if inline:
+                    await update.message.reply_text(inline)
+
+            sent_own_report = False
+            if reply_mode in ("auto", "file", "both"):
+                report_path = await self._write_report_file_async(request_text=text, response_text=response)
+                caption = f"Mission Report: {text[:60].strip()}" if text else "Mission Report"
+                with open(report_path, "rb") as f:
+                    await self.bot.send_document(
+                        chat_id=update.effective_chat.id,
+                        document=f,
+                        caption=caption,
+                    )
+                sent_own_report = True
+
+            if send_progress:
+                if sent_own_report:
+                    snippet = (response or "").strip().replace("\n", " ")
+                    if len(snippet) > 220:
+                        snippet = snippet[:220] + "…"
+                    summary_line = f"\nSummary: {snippet}" if snippet else ""
+                    await update.message.reply_text(f"✅ Mission completed. Report file sent.{summary_line}")
+                else:
+                    await update.message.reply_text("✅ Mission completed.")
+
+        except Exception as e:
+            self.logger.error(f"Agent processing failed: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    @staticmethod
+    def _is_simple_question(text: str) -> bool:
+        """Classify whether a message is a simple conversational question
+        (deserving a direct text reply) vs a complex task/command (mission).
+
+        Returns True for simple questions, False for complex tasks.
+        """
+        if not text:
+            return True
+
+        lower = text.strip().lower()
+        words = lower.split()
+        word_count = len(words)
+
+        # Very short messages (1-2 words like "hi", "hello", "thanks") → simple
+        if word_count <= 2:
+            return True
+
+        # ── COMPLEX TASK indicators (check first, takes priority) ──
+        # Action verbs that clearly indicate a task/mission
+        task_verbs = [
+            "make me", "create", "build", "generate", "design", "develop",
+            "write me", "code", "implement", "set up", "setup", "install",
+            "deploy", "configure", "fix", "debug", "update", "modify",
+            "change", "edit", "remove", "delete", "add", "send",
+            "download", "upload", "search for", "find me",
+            "go to", "navigate", "open", "browse", "visit",
+            "research", "analyze", "compare", "summarize this",
+            "run", "execute", "start", "launch", "stop",
+            "schedule", "automate", "monitor", "scan", "scrape",
+        ]
+        for verb in task_verbs:
+            if verb in lower:
+                return False
+
+        # Patterns like "X and send it to telegram", "X then Y" → multi-step = complex
+        if re.search(r'\b(and\s+send|then\s+send|and\s+then|after\s+that)\b', lower):
+            return False
+
+        # URLs or website names → likely a browsing task
+        if re.search(r'https?://|www\.|\.com|\.org|\.net|\.io', lower):
+            return False
+
+        # ── SIMPLE QUESTION indicators ──
+        # Starts with question words
+        question_starters = [
+            "who", "what", "when", "where", "why", "how",
+            "is", "are", "was", "were", "do", "does", "did",
+            "can", "could", "would", "should", "will",
+            "tell me", "explain", "define", "describe",
+            "what's", "who's", "where's", "when's", "how's",
+            "what is", "who is", "where is", "when is", "how is",
+            "what are", "who are", "where are", "how are",
+            "what was", "who was", "how do", "how does",
+            "how much", "how many", "how long", "how far",
+            "do you know", "can you tell",
+        ]
+        for starter in question_starters:
+            if lower.startswith(starter):
+                return True
+
+        # Ends with a question mark → likely a question
+        if text.strip().endswith("?"):
+            return True
+
+        # Short conversational messages (greetings, thanks, etc.)
+        casual_patterns = [
+            "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
+            "good morning", "good night", "good evening", "bye", "goodbye",
+            "nice", "cool", "great", "awesome", "sure", "yes", "no",
+            "help", "menu", "status",
+        ]
+        if lower in casual_patterns or (word_count <= 4 and any(p in lower for p in casual_patterns)):
+            return True
+
+        # If message is short (under ~8 words) and doesn't match task verbs → likely simple
+        if word_count <= 8:
+            return True
+
+        # If we got here, no task verbs matched, no URLs, no multi-step patterns.
+        # It's a conversational message → treat as simple.
+        return True
 
     async def _write_report_file_async(self, request_text: str, response_text: str) -> str:
         cfg = (self.config.get("telegram", {}) or {})

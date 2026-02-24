@@ -13,10 +13,11 @@ llm:
     - "qwen3-coder:480b-cloud"
     - "gpt-oss:120b-cloud"
     - "kimi-k2.5:cloud"
+    - "qwen3-vl:235b-instruct-cloud"
   # Primary model for all text/code tasks (qwen3-coder is text-only — Cloud connection required)
   model_name: "qwen3-coder:480b-cloud"
-  # Vision model: qwen3-coder is text-only, keep gpt-oss:120b-cloud for image analysis
-  vision_model: "gpt-oss:120b-cloud"
+  # Vision model: used for analyzing charts and trading indicators
+  vision_model: "qwen3-vl:235b-instruct-cloud"
   api_key: "ollama"
 
 security:

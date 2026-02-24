@@ -1,0 +1,20 @@
+{
+  "entities": {
+    "verification_package_20260224": {
+      "type": "IdentityVerificationPackage",
+      "name": "Identity Verification Package 2026-02-24",
+      "attributes": {},
+      "created_at": "2026-02-24T16:26:29.805807+00:00",
+      "updated_at": "2026-02-24T16:26:29.805823+00:00"
+    },
+    "identity_verification_system": {
+      "type": "System",
+      "name": "Official Identity Verification System",
+      "attributes": {},
+      "created_at": "2026-02-24T16:26:44.858350+00:00",
+      "updated_at": "2026-02-24T16:26:44.858365+00:00"
+    }
+  },
+  "relations": [],
+  "updated_at": "2026-02-24T16:26:44.859006+00:00"
+}

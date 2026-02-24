@@ -1,0 +1,31 @@
+{
+  "submission_timestamp": "2026-02-24T21:56:12.363344",
+  "documents": [
+    {
+      "filename": "audit_checklist.md",
+      "hash": "ab7aacddebf25a85a8a428dbd676aa769b818001d1128979a3b45431b266e2ac",
+      "size": 924
+    },
+    {
+      "filename": "compliance_standards.md",
+      "hash": "8cf7f5e1f729ce27f97cdbdf4dbc0aa17939d67c49b6466519ecd31ab4e69365",
+      "size": 1054
+    },
+    {
+      "filename": "credential_storage_guidelines.md",
+      "hash": "7de74f244fba417535c26719e85c78b821580226452976268b2256d467614f13",
+      "size": 934
+    },
+    {
+      "filename": "identity_verification_procedures.md",
+      "hash": "5e5facbdfe80e70b6c61d0703332af9ed0e0ff802861c3626b4ee505de70fd5e",
+      "size": 768
+    },
+    {
+      "filename": "README.md",
+      "hash": "8bd09e6bbdcff28cb36d9e10d2b996c65fc78c962463fb73a5589a15af9f66a5",
+      "size": 291
+    }
+  ],
+  "package_hash": "cd71406fa42251846a1d42f2eae0ae3d137a3fe457b1ac739b3a47cef47b532c"
+}

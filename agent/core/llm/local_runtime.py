@@ -379,7 +379,7 @@ class LocalLLMRuntime:
         else:
              yield from self._backend.generate_stream(full_prompt, config or GenerationConfig())
     
-    def chat(self, system_prompt: str, user_input: str, images: Optional[List[str]] = None) -> str:
+    def chat(self, system_prompt: str, user_input: str, images: Optional[List[str]] = None, model_name: Optional[str] = None) -> str:
         """
         Simple chat interface for compatibility.
         """
@@ -408,13 +408,14 @@ class LocalLLMRuntime:
             else:
                 user_message = {"role": "user", "content": user_input}
 
+            target_model = model_name if model_name else self._backend.model_name
             response = self._backend.client.chat.completions.create(
-                model=self._backend.model_name,
+                model=target_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     user_message
                 ],
-                max_tokens=256,  # Keep response concise
+                max_tokens=1500,  # Increased strictly for complex JSON outputs from Vision LLMs
                 temperature=0.7,
                 stop=["User:", "Human:", "\n\nUser", "\n\nHuman"]  # Stop before hallucinating next turn
             )

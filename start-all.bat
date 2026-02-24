@@ -23,6 +23,7 @@ taskkill /FI "WINDOWTITLE eq React Frontend" /F >NUL 2>&1
 timeout /t 2 /nobreak > nul
 
 :: Start Python API server in new window
+:: Start Python API server in new window
 echo [2/3] Starting Python API server on port 8000...
 start "Python API Server" cmd /k "cd /d %~dp0 && python -m agent.api_server"
 

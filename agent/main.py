@@ -583,6 +583,57 @@ class NeuralAgent:
                 self._state_machine.to_idle("Mission complete")
                 return response
             # ---------------------------------------------------------
+
+            # ---------------------------------------------------------
+            # SIMPLE QUESTION BYPASS: Factual questions skip LangGraph
+            # and go directly to LLM chat for instant answers.
+            # e.g. "who is the president of india", "what is python",
+            #       "hello", "how are you"
+            # ---------------------------------------------------------
+            if self._is_simple_question(user_input):
+                logger.info(f"Simple question bypass: direct LLM chat: {user_input[:80]}")
+                if source == "local" and self.sync_broadcast:
+                    self.sync_broadcast("status", "system", "Answering...", task_id)
+
+                # Quick web search for factual context (keeps answers current)
+                search_context = ""
+                try:
+                    from agent.tools.web_search import WebSearchTool
+                    quick_search = WebSearchTool()
+                    raw = quick_search.search(user_input, max_results=2)
+                    if raw and "error" not in raw.lower() and "no results" not in raw.lower():
+                        search_context = f"\n\n[REFERENCE DATA - Use this to answer accurately]\n{raw}\n[END REFERENCE DATA]\n"
+                        logger.info(f"Quick search returned context ({len(raw)} chars)")
+                except Exception as e:
+                    logger.warning(f"Quick search failed (answering from memory): {e}")
+
+                # Build an enhanced prompt with search context
+                enhanced_input = user_input
+                if search_context:
+                    enhanced_input = f"{search_context}\nUser question: {user_input}\n\nAnswer the user's question directly and concisely based on the reference data above. Give a short, factual answer."
+
+                response = await self._chat_with_llm(enhanced_input)
+
+                # Broadcast + Speak (local only)
+                if source == "local" and self.sync_broadcast:
+                    self.sync_broadcast("assistant", "assistant", response, task_id)
+                if source == "local" and self._voice_manager:
+                    await self._voice_manager.speak(response, suppress_sync=True)
+                if source == "local" and self.sync_broadcast:
+                    self.sync_broadcast("status", "system", "Done", task_id)
+
+                # Memory
+                if self._short_term_memory:
+                    self._short_term_memory.add_message("assistant", response)
+                if self._history_manager:
+                    source_key = source or "local"
+                    conv_id = self.active_conversation_id if source_key == "local" else self._conversation_ids_by_source.get(source_key)
+                    if conv_id:
+                        self._history_manager.add_message(conv_id, "assistant", response)
+
+                self._state_machine.to_idle("Simple question answered")
+                return response
+            # ---------------------------------------------------------
             
             # ---------------------------------------------------------
             # LANGGRAPH RUNTIME (Primary: supervisor multi-agent graph)
@@ -926,6 +977,99 @@ Do NOT say "according to the search results" - just answer directly."""
             return True
 
         return False
+
+    def _is_simple_question(self, user_input: str) -> bool:
+        """Detect simple conversational questions that should go directly to
+        the LLM chat instead of through the full LangGraph multi-agent pipeline.
+
+        Returns True for simple questions/greetings, False for complex tasks.
+
+        Examples of SIMPLE (True):
+        - "who is the president of india"
+        - "what is python"
+        - "hello", "hi", "thanks"
+        - "how are you"
+
+        Examples of COMPLEX (False):
+        - "make me a website for my bookstore"
+        - "research top AI frameworks and send to telegram"
+        - "go to chatgpt and chat about electric cars"
+        """
+        import re
+
+        if not user_input:
+            return True
+
+        lower = user_input.strip().lower()
+        words = lower.split()
+        word_count = len(words)
+
+        # Very short messages (1-2 words) → simple
+        if word_count <= 2:
+            return True
+
+        # ── COMPLEX TASK indicators (check first) ──
+        task_verbs = [
+            "make me", "create", "build", "generate", "design", "develop",
+            "write me", "code", "implement", "set up", "setup", "install",
+            "deploy", "configure", "fix", "debug", "update", "modify",
+            "change", "edit", "remove", "delete", "add", "send",
+            "download", "upload", "search for", "find me",
+            "go to", "navigate", "open", "browse", "visit",
+            "research", "analyze", "compare", "summarize this",
+            "run", "execute", "start", "launch", "stop",
+            "schedule", "automate", "monitor", "scan", "scrape",
+        ]
+        for verb in task_verbs:
+            if verb in lower:
+                return False
+
+        # Multi-step patterns → complex
+        if re.search(r'\b(and\s+send|then\s+send|and\s+then|after\s+that)\b', lower):
+            return False
+
+        # URLs → likely a task
+        if re.search(r'https?://|www\.|\.com|\.org|\.net|\.io', lower):
+            return False
+
+        # ── SIMPLE QUESTION indicators ──
+        question_starters = [
+            "who", "what", "when", "where", "why", "how",
+            "is", "are", "was", "were", "do", "does", "did",
+            "can", "could", "would", "should", "will",
+            "tell me", "explain", "define", "describe",
+            "what's", "who's", "where's", "when's", "how's",
+            "what is", "who is", "where is", "when is", "how is",
+            "what are", "who are", "how do", "how does",
+            "how much", "how many", "how long", "how far",
+            "do you know", "can you tell", "meaning of",
+        ]
+        for starter in question_starters:
+            if lower.startswith(starter):
+                return True
+
+        # Ends with question mark → question
+        if user_input.strip().endswith("?"):
+            return True
+
+        # Casual messages
+        casual = [
+            "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
+            "good morning", "good night", "good evening", "bye", "goodbye",
+            "nice", "cool", "great", "awesome", "sure", "yes", "no",
+            "help", "menu", "status",
+        ]
+        if lower in casual or (word_count <= 4 and any(p in lower for p in casual)):
+            return True
+
+        # Short (≤8 words) that didn't match task verbs → likely simple
+        if word_count <= 8:
+            return True
+
+        # If we got here, no task verbs matched, no URLs, no multi-step patterns.
+        # It's a conversational message (e.g. "I am ashish thipkurle inventer of you Albert...")
+        # → treat as simple.
+        return True
 
     async def _execute_mission(self, user_input: str, source: str, task_id: str) -> str:
         """Route a goal to the MissionControlSkill for browser-based execution."""

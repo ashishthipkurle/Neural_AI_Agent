@@ -12,6 +12,24 @@ import { registerSystemHandlers } from './ipc/system.ipc'
 
 console.log('DEBUG: Main process starting...')
 
+// Prevent webview ERR_ABORTED from crashing the entire app
+process.on('unhandledRejection', (reason: any) => {
+    // ERR_ABORTED (-3) happens when webview pages redirect or block embedding - not fatal
+    if (reason?.message?.includes('ERR_ABORTED') || reason?.message?.includes('GUEST_VIEW_MANAGER_CALL')) {
+        console.warn('Webview load error (non-fatal):', reason?.message?.substring(0, 100));
+        return;
+    }
+    console.error('Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (error: Error) => {
+    if (error.message?.includes('ERR_ABORTED') || error.message?.includes('GUEST_VIEW_MANAGER_CALL')) {
+        console.warn('Webview exception (non-fatal):', error.message.substring(0, 100));
+        return;
+    }
+    console.error('Uncaught exception:', error);
+});
+
 
 let mainWindow: BrowserWindow | null = null
 const ptyManager = new PtyManager()
@@ -31,7 +49,8 @@ function createWindow(): void {
             preload: join(__dirname, '../preload/index.js'),
             sandbox: false,
             contextIsolation: true,
-            nodeIntegration: false
+            nodeIntegration: false,
+            webviewTag: true // Added to allow embedding external trading sites
         }
     })
 
@@ -51,6 +70,22 @@ function createWindow(): void {
     } else {
         mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
     }
+    // Handle webview errors gracefully
+    mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+        console.warn(`Main window load error: ${errorCode} ${errorDescription} ${validatedURL}`);
+    });
+
+    // Handle errors from embedded webviews (guest webContents)
+    app.on('web-contents-created', (_event, contents) => {
+        if (contents.getType() === 'webview') {
+            contents.on('did-fail-load', (_evt, errorCode, errorDescription, validatedURL) => {
+                console.warn(`Webview load error (${errorCode}): ${errorDescription} - ${validatedURL}`);
+            });
+            contents.on('crashed', () => {
+                console.warn('Webview process crashed, but app continues.');
+            });
+        }
+    });
 }
 
 function createMenuTemplate(): Electron.MenuItemConstructorOptions[] {
