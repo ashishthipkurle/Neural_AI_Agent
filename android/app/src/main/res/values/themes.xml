@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.NeuralAgent" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- We use Compose for the actual theme, this is just to satisfy the manifest and provide a dark splash background -->
+        <item name="android:statusBarColor">@color/ic_launcher_background</item>
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    </style>
+</resources>
