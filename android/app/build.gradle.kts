@@ -74,6 +74,9 @@ dependencies {
     implementation("io.ktor:ktor-client-content-negotiation:2.3.11")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.11")
     
+    // OkHttp (for WebSockets / Trading)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    
     // Database
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")

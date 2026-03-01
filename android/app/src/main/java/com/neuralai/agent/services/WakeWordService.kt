@@ -57,6 +57,9 @@ class WakeWordService : Service() {
         private val _isServiceRunning = MutableStateFlow(false)
         val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
 
+        private val _instance = MutableStateFlow<WakeWordService?>(null)
+        val instance: StateFlow<WakeWordService?> = _instance.asStateFlow()
+
         private val _wakeCommand = MutableSharedFlow<String>(extraBufferCapacity = 1)
         val wakeCommand: SharedFlow<String> = _wakeCommand.asSharedFlow()
 
@@ -84,23 +87,24 @@ class WakeWordService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        _instance.value = this
         createNotificationChannel()
+        startForeground(NOTIFICATION_ID, buildNotification("Listening 24/7 for commands..."))
+        isRunning = true
+        _isServiceRunning.value = true
+        handler.post { startContinuousListening() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification("Listening 24/7 for commands...")
-        startForeground(NOTIFICATION_ID, notification)
-        isRunning = true
-        _isServiceRunning.value = true
-
-        handler.post { startContinuousListening() }
-
+        // The actual listening and service state management is now handled in onCreate
+        // This method just ensures the service stays running if killed by the system
         return START_STICKY
     }
 
     override fun onDestroy() {
         isRunning = false
         _isServiceRunning.value = false
+        _instance.value = null
         _isListening.value = false
         handler.removeCallbacksAndMessages(null)
         recognizer?.destroy()
@@ -207,7 +211,17 @@ class WakeWordService : Service() {
         })
 
         try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val currentVolume = audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+            // Mute the stream to hide the system "beep"
+            audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+            
             recognizer?.startListening(listenIntent)
+            
+            // Restore volume shortly after the beep usually plays
+            handler.postDelayed({
+                audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, currentVolume, 0)
+            }, 300)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start listening: ${e.message}")
             scheduleRestart()

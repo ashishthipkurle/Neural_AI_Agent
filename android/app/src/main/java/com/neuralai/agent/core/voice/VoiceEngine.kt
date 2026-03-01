@@ -147,8 +147,18 @@ class VoiceEngine @Inject constructor(
         })
 
         try {
+            // Mute the system beep that SpeechRecognizer plays on startListening
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val currentVolume = audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+            audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+
             recognizer?.startListening(intent)
             Log.d(TAG, "Started listening")
+
+            // Restore volume after the beep window passes
+            handler.postDelayed({
+                audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, currentVolume, 0)
+            }, 300)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start: ${e.message}")
             currentListener?.onError("Failed to start listening: ${e.message}")

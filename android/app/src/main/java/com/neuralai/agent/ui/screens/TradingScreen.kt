@@ -55,6 +55,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.neuralai.agent.ui.theme.NeuralDark
 import com.neuralai.agent.ui.theme.CyanGlow
 import com.neuralai.agent.ui.theme.SlateText
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.neuralai.agent.ui.TradingViewModel
 
 // ===== PC-matching color palette =====
 private val TrdBg = Color(0xFF030D12)
@@ -81,7 +83,8 @@ data class OverlaySignal(
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
 fun TradingScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    viewModel: TradingViewModel = hiltViewModel()
 ) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var isLoading by remember { mutableStateOf(true) }
@@ -91,23 +94,24 @@ fun TradingScreen(
 
     // Analysis panel state
     var showSidebar by remember { mutableStateOf(false) }
-    var scanStatus by remember { mutableStateOf("READY") }
-    var scanCount by remember { mutableIntStateOf(0) }
-    var analysisSummary by remember { mutableStateOf("Waiting for first chart scan...") }
+    val scanStatus by viewModel.scanStatus.collectAsState()
+    val scanCount by viewModel.scanCount.collectAsState()
+    val analysisSummary by viewModel.analysisSummary.collectAsState()
 
     // RAG Edge state
-    var ragDirection by remember { mutableStateOf("UPWARD") }
-    var ragProbability by remember { mutableFloatStateOf(71.0f) }
-    var ragMatches by remember { mutableStateOf("16,884") }
+    val ragStats by viewModel.ragStats.collectAsState()
+    val ragDirection = ragStats?.direction ?: "N/A"
+    val ragProbability = ragStats?.dominance ?: 0f
+    val ragMatches = ragStats?.totalMatches ?: "0"
 
     // Staged Signals
-    var buyEntry by remember { mutableStateOf("25,460.25") }
-    var buyTarget by remember { mutableStateOf("25,650") }
-    var sellEntry by remember { mutableStateOf("25,650") }
-    var sellTarget by remember { mutableStateOf("25,400") }
+    val activeSignals by viewModel.activeSignals.collectAsState()
+
+    // Chart bounds
+    val chartYMin by viewModel.chartYMin.collectAsState()
+    val chartYMax by viewModel.chartYMax.collectAsState()
 
     // OverlayCanvas signals (matches PC OverlayCanvas.tsx)
-    val overlaySignals = remember { mutableStateListOf<OverlaySignal>() }
     var showOverlay by remember { mutableStateOf(true) }
 
     // Chat
@@ -116,6 +120,9 @@ fun TradingScreen(
         "assistant" to "Trading Intelligence Copilot ready. Ask about bias, confidence, regime, or request a summary."
     ) }
     val chatListState = rememberLazyListState()
+
+    // System Logs
+    val sysLogs by viewModel.logs.collectAsState()
 
     val savedSites = remember {
         listOf(
@@ -135,7 +142,7 @@ fun TradingScreen(
         }
         currentUrl = finalUrl
         urlInput = finalUrl
-        analysisSummary = "Loading new chart... waiting for AI scan"
+        viewModel.clearChartData()
         webViewRef?.loadUrl(finalUrl)
     }
 
@@ -149,20 +156,17 @@ fun TradingScreen(
     }
 
     fun runScan() {
-        scanStatus = "ANALYZING"
-        val sym = getSymbolName()
-        scanCount++
-        analysisSummary = "$sym shows a potential bullish reversal near key support at 25,468.25, backed by historical pattern data showing an 81.6% win-rate and 71.0% upward dominance. A sparse signal is also provided for counter trend traders near resistance."
-        ragDirection = "UPWARD"
-        ragProbability = 71.0f
-        ragMatches = "16,884"
-
-        // Generate overlay signals (replicating PC OverlayCanvas markers)
-        overlaySignals.clear()
-        overlaySignals.add(OverlaySignal(type = "BUY", entry = 25460.25f, stop = 25380f, target = 25650f, confidence = 0.81f))
-        overlaySignals.add(OverlaySignal(type = "SELL", entry = 25650f, stop = 25720f, target = 25400f, confidence = 0.74f))
-
-        scanStatus = "DONE"
+        webViewRef?.let { webView ->
+            // Use native canvas to capture webview synchronously then pass to ViewModel
+            val bitmap = android.graphics.Bitmap.createBitmap(
+                if (webView.width > 0) webView.width else 1080,
+                if (webView.height > 0) webView.height else 1920,
+                android.graphics.Bitmap.Config.ARGB_8888
+            )
+            val canvas = android.graphics.Canvas(bitmap)
+            webView.draw(canvas)
+            viewModel.runScan(bitmap, currentUrl)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(TrdBg)) {
@@ -309,7 +313,7 @@ fun TradingScreen(
                     )
 
                     // ===== OVERLAY CANVAS — BUY/SELL Signal Indicators (PC OverlayCanvas.tsx replica) =====
-                    if (showOverlay && overlaySignals.isNotEmpty()) {
+                    if (showOverlay && activeSignals.isNotEmpty()) {
                         Canvas(
                             modifier = Modifier.fillMaxSize()
                         ) {
@@ -329,29 +333,34 @@ fun TradingScreen(
                             // Auto-compute price range from signals
                             var minPrice = Float.MAX_VALUE
                             var maxPrice = Float.MIN_VALUE
-                            overlaySignals.forEach { sig ->
-                                minPrice = minOf(minPrice, sig.entry, sig.stop, sig.target)
-                                maxPrice = maxOf(maxPrice, sig.entry, sig.stop, sig.target)
+                            activeSignals.forEach { sig ->
+                                minPrice = minOf(minPrice, sig.entryPrice, sig.stopPrice, sig.targetPrice)
+                                maxPrice = maxOf(maxPrice, sig.entryPrice, sig.stopPrice, sig.targetPrice)
                             }
-                            val padding = (maxPrice - minPrice) * 0.2f
-                            minPrice -= padding
-                            maxPrice += padding
-                            val priceRange = maxPrice - minPrice
+                            // Backend provided min/max for scale
+                            // Fallback to computed range if backend range is invalid
+                            val rangeBackend = chartYMax - chartYMin
+                            val validBackend = rangeBackend > 0f && chartYMax > maxPrice && chartYMin < minPrice
+
+                            val finalYMin = if (validBackend) chartYMin else (minPrice - (maxPrice - minPrice) * 0.2f)
+                            val finalYMax = if (validBackend) chartYMax else (maxPrice + (maxPrice - minPrice) * 0.2f)
+                            val priceRange = finalYMax - finalYMin
 
                             fun priceToY(price: Float): Float {
                                 if (priceRange <= 0f) return regionY + regionH / 2f
-                                val normalized = (price - minPrice) / priceRange
-                                return regionY + regionH - normalized * regionH
+                                val normalized = (price - finalYMin) / priceRange
+                                // Chart is drawn from top (max) to bottom (min)
+                                return regionY + regionH - (normalized * regionH)
                             }
 
                             val dashEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 12f), 0f)
                             val smallDashEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 15f), 0f)
 
-                            overlaySignals.forEach { signal ->
-                                val entryY = priceToY(signal.entry)
-                                val stopY = priceToY(signal.stop)
-                                val targetY = priceToY(signal.target)
-                                val isBuy = signal.type == "BUY"
+                            activeSignals.forEach { signal ->
+                                val entryY = priceToY(signal.entryPrice)
+                                val stopY = priceToY(signal.stopPrice)
+                                val targetY = priceToY(signal.targetPrice)
+                                val isBuy = signal.direction == "LONG" || signal.direction == "BUY"
                                 val isTerminal = signal.state in listOf("TARGET_HIT", "STOP_HIT", "INVALIDATED", "CLOSED")
                                 val alpha = if (isTerminal) 0.35f else 1f
 
@@ -369,7 +378,7 @@ fun TradingScreen(
                                 )
 
                                 // ── Stop line (dashed, thinner) ──
-                                if (signal.stop > 0f) {
+                                if (signal.stopPrice > 0f) {
                                     drawLine(
                                         color = stopColor,
                                         start = Offset(regionX, stopY),
@@ -380,7 +389,7 @@ fun TradingScreen(
                                 }
 
                                 // ── Target line (dashed, thinner) ──
-                                if (signal.target > 0f) {
+                                if (signal.targetPrice > 0f) {
                                     drawLine(
                                         color = targetColor,
                                         start = Offset(regionX, targetY),
@@ -391,7 +400,7 @@ fun TradingScreen(
                                 }
 
                                 // ── Stop band (red tinted area) ──
-                                if (signal.stop > 0f) {
+                                if (signal.stopPrice > 0f) {
                                     val top = minOf(entryY, stopY)
                                     val bandH = kotlin.math.abs(stopY - entryY)
                                     drawRect(
@@ -402,7 +411,7 @@ fun TradingScreen(
                                 }
 
                                 // ── Target band (green tinted area) ──
-                                if (signal.target > 0f) {
+                                if (signal.targetPrice > 0f) {
                                     val top = minOf(entryY, targetY)
                                     val bandH = kotlin.math.abs(targetY - entryY)
                                     drawRect(
@@ -439,21 +448,21 @@ fun TradingScreen(
                                         isAntiAlias = true
                                         setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
                                     }
-                                    drawText("ENTRY ${String.format("%.2f", signal.entry)}", regionX + regionW - 15f, entryY - 15f, paint)
+                                    drawText("ENTRY ${String.format("%.2f", signal.entryPrice)}", regionX + regionW - 15f, entryY - 15f, paint)
 
-                                    if (signal.stop > 0f) {
+                                    if (signal.stopPrice > 0f) {
                                         paint.color = android.graphics.Color.parseColor("#FF5252")
-                                        drawText("STOP ${String.format("%.2f", signal.stop)}", regionX + regionW - 15f, stopY - 15f, paint)
+                                        drawText("STOP ${String.format("%.2f", signal.stopPrice)}", regionX + regionW - 15f, stopY - 15f, paint)
                                     }
-                                    if (signal.target > 0f) {
+                                    if (signal.targetPrice > 0f) {
                                         paint.color = android.graphics.Color.parseColor("#00E676")
-                                        drawText("TARGET ${String.format("%.2f", signal.target)}", regionX + regionW - 15f, targetY - 15f, paint)
+                                        drawText("TARGET ${String.format("%.2f", signal.targetPrice)}", regionX + regionW - 15f, targetY - 15f, paint)
                                     }
 
                                     // Type label (BUY/SELL) near arrow
                                     paint.textAlign = android.graphics.Paint.Align.CENTER
                                     paint.textSize = 30f
-                                    drawText(signal.type, arrowX, if (isBuy) entryY - arrowSize - 25f else entryY + arrowSize + 40f, paint)
+                                    drawText(signal.direction, arrowX, if (isBuy) entryY - arrowSize - 25f else entryY + arrowSize + 40f, paint)
                                 }
                             }
 
@@ -641,78 +650,76 @@ fun TradingScreen(
 
                             // ===== STAGED SIGNALS — BUY (matches PC) =====
                             item {
-                                Text("⚡ STAGED SIGNALS", color = TrdCyan, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 9.sp, letterSpacing = 1.sp)
-                            }
-                            item {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFF0A1A0A))
-                                        .padding(10.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(brush = Brush.linearGradient(listOf(Color(0xFF040E14), Color(0xFF061218))))
+                                        .padding(12.dp)
                                 ) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                        Text("⬆ BUY  ${getSymbolName()}", color = TrdGreen, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
-                                        Box(modifier = Modifier.clip(RoundedCornerShape(3.dp)).background(TrdGreen.copy(alpha = 0.15f)).padding(horizontal = 5.dp, vertical = 1.dp)) {
-                                            Text("81%", color = TrdGreen, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Icon(Icons.Filled.Analytics, null, tint = TrdCyan, modifier = Modifier.size(12.dp))
+                                        Text("STAGED SIGNALS", color = TrdCyan, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 9.sp)
+                                        Box(modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(TrdCyan.copy(alpha = 0.1f)).padding(horizontal = 4.dp, vertical = 2.dp)) {
+                                            Text(viewModel.activeSignals.value.size.toString(), color = TrdCyan, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                                         }
-                                    }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text("ENTRY", color = TrdDim, fontSize = 7.sp, fontFamily = FontFamily.Monospace)
-                                            Text(buyEntry, color = TrdGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                        }
-                                        Text("→", color = TrdDim)
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text("TARGET", color = TrdDim, fontSize = 7.sp, fontFamily = FontFamily.Monospace)
-                                            Text(buyTarget, color = TrdGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(TrdGreen.copy(alpha = 0.15f)).padding(vertical = 6.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text("✓ CONFIRM TRADE", color = TrdGreen, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 9.sp, letterSpacing = 1.sp)
                                     }
                                 }
                             }
 
-                            // ===== STAGED SIGNALS — SELL =====
-                            item {
+                            // Dynamic Signal Cards
+                            items(activeSignals) { signal ->
+                                val isBuy = signal.direction == "LONG" || signal.direction == "BUY"
+                                val sigColor = if (isBuy) TrdGreen else TrdRed
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFF1A0A0A))
-                                        .padding(10.dp)
+                                        .background(sigColor.copy(alpha = 0.08f))
+                                        .padding(bottom = 8.dp)
                                 ) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                        Text("⬇ SELL  ${getSymbolName()}", color = TrdRed, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
-                                        Box(modifier = Modifier.clip(RoundedCornerShape(3.dp)).background(TrdRed.copy(alpha = 0.15f)).padding(horizontal = 5.dp, vertical = 1.dp)) {
-                                            Text("74%", color = TrdRed, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().background(TrdHeaderBg).padding(8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column {
                                             Text("ENTRY", color = TrdDim, fontSize = 7.sp, fontFamily = FontFamily.Monospace)
-                                            Text(sellEntry, color = TrdRed, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                            Text(String.format("%.2f", signal.entryPrice), color = TrdText, fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                                         }
-                                        Text("→", color = TrdDim)
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Column {
                                             Text("TARGET", color = TrdDim, fontSize = 7.sp, fontFamily = FontFamily.Monospace)
-                                            Text(sellTarget, color = TrdRed, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                            Text(String.format("%.2f", signal.targetPrice), color = TrdGreen, fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                                        }
+                                        Column {
+                                            Text("STOP", color = TrdDim, fontSize = 7.sp, fontFamily = FontFamily.Monospace)
+                                            Text(String.format("%.2f", signal.stopPrice), color = TrdRed, fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                                         }
                                     }
-                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    if (signal.reason.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            signal.reason,
+                                            color = TrdDim,
+                                            fontSize = 8.sp,
+                                            lineHeight = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(horizontal = 8.dp)
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    // Execute Button
                                     Box(
-                                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(TrdRed.copy(alpha = 0.15f)).padding(vertical = 6.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(RoundedCornerShape(4.dp))
+                                            .background(sigColor.copy(alpha = 0.15f)).clickable { }
+                                            .border(1.dp, sigColor.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                                            .padding(vertical = 6.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("✗ CONFIRM TRADE", color = TrdRed, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 9.sp, letterSpacing = 1.sp)
+                                        Text("EXECUTE ${signal.direction}", color = sigColor, fontWeight = FontWeight.Bold, fontSize = 9.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
                                     }
+                                    Spacer(modifier = Modifier.height(8.dp))
                                 }
                             }
 

@@ -14,6 +14,7 @@ import com.neuralai.agent.core.skills.research.BrowserSkill
 import com.neuralai.agent.core.skills.research.WebSearchSkill
 import com.neuralai.agent.core.skills.sensor.SensorSkill
 import com.neuralai.agent.core.skills.vision.VisionEngine
+import com.neuralai.agent.core.skills.device.DeviceControlSkill
 import com.neuralai.agent.core.graph.AgentGraph
 import com.neuralai.agent.core.security.SafetyFramework
 import com.neuralai.agent.core.security.AuditLogger
@@ -39,6 +40,7 @@ class NeuralAgent @Inject constructor(
     private val browserSkill: BrowserSkill,
     private val sensorSkill: SensorSkill,
     private val visionEngine: VisionEngine,
+    private val deviceControlSkill: DeviceControlSkill,
     private val agentGraph: AgentGraph,
     private val safetyFramework: SafetyFramework,
     private val auditLogger: AuditLogger
@@ -49,47 +51,123 @@ class NeuralAgent @Inject constructor(
         Do not use emojis unless appropriate. Format responses in clean markdown.
     """.trimIndent()
 
+    // Track the last opened app for context-aware command chaining
+    private var lastOpenedApp: String? = null
+
+    // ==========================================
+    // PUBLIC ENTRY POINT
+    // ==========================================
+
     suspend fun processInput(input: String): String = withContext(Dispatchers.IO) {
         val subCommands = splitCompoundCommand(input)
         
         if (subCommands.size > 1) {
             val results = mutableListOf<String>()
+            lastOpenedApp = null
+            
             for (cmd in subCommands) {
-                val result = executeSingleCommand(cmd.trim())
+                val intent = resolveContextAwareIntent(cmd.trim())
+                val result = executeWithIntent(cmd.trim(), intent)
                 results.add(result)
-                kotlinx.coroutines.delay(500)
+                
+                if (intent == Intent.OPEN_APP) {
+                    lastOpenedApp = extractAppName(cmd.trim())
+                }
+                
+                // Smart delays so the UI can catch up
+                val delayTime = when (intent) {
+                    Intent.OPEN_APP, Intent.INSTALL_APP, Intent.UNINSTALL_APP -> 5000L
+                    Intent.TAP, Intent.LONG_PRESS -> 1500L
+                    Intent.TYPE_TEXT, Intent.SWIPE -> 1000L
+                    Intent.TOGGLE_SETTING, Intent.VOLUME_CONTROL, Intent.BRIGHTNESS -> 500L
+                    else -> 500L
+                }
+                kotlinx.coroutines.delay(delayTime)
             }
             val combined = results.joinToString("\n")
             stateMachine.setState(AIState.IDLE, "READY")
             ttsEngine.speak(combined)
+            lastOpenedApp = null
             return@withContext combined
         }
         
+        lastOpenedApp = null
         val response = executeSingleCommand(input)
         stateMachine.setState(AIState.IDLE, "READY")
         ttsEngine.speak(response)
+        lastOpenedApp = null
         return@withContext response
     }
 
-    private fun splitCompoundCommand(input: String): List<String> {
-        val actionKeywords = listOf("open", "launch", "start", "send", "call", "search", "turn", "play", "close", "set", "text", "message", "tap", "type", "swipe", "scroll", "take", "install", "uninstall")
-        val lower = input.lowercase()
-        val andIndex = lower.indexOf(" and ")
-        if (andIndex > 0) {
-            val afterAnd = lower.substring(andIndex + 5).trimStart()
-            val startsWithAction = actionKeywords.any { afterAnd.startsWith(it) }
-            if (startsWithAction) {
-                val first = input.substring(0, andIndex).trim()
-                val second = input.substring(andIndex + 5).trim()
-                return listOf(first) + splitCompoundCommand(second)
-            }
+    // ==========================================
+    // CONTEXT-AWARE INTENT RESOLUTION
+    // ==========================================
+
+    private fun resolveContextAwareIntent(input: String): Intent {
+        val baseIntent = intentParser.parse(input)
+        
+        // If we just opened an app and the next command is "search X",
+        // convert it to in-app search (type into the app's search bar)
+        if (lastOpenedApp != null && baseIntent == Intent.WEB_SEARCH) {
+            return Intent.TYPE_TEXT
         }
-        return listOf(input)
+        
+        return baseIntent
     }
 
-    private suspend fun executeSingleCommand(input: String): String {
-        stateMachine.setState(AIState.THINKING, "ANALYZING INTENT...")
+    // ==========================================
+    // COMPOUND COMMAND SPLITTER
+    // ==========================================
+
+    private fun splitCompoundCommand(input: String): List<String> {
+        val actionKeywords = listOf(
+            "open", "launch", "start", "send", "call", "search", "turn", "play",
+            "close", "exit", "set", "text", "message", "tap", "type", "swipe",
+            "scroll", "take", "install", "uninstall", "click", "go to", "navigate",
+            "share", "long press", "mute", "unmute", "pause", "resume", "skip",
+            "next", "previous", "enable", "disable", "toggle"
+        )
+        val lower = input.lowercase()
         
+        val delimiters = listOf(" and ", " then ", ", ", " go to ")
+        
+        var earliestDelim: String? = null
+        var earliestIndex = Int.MAX_VALUE
+        
+        for (delim in delimiters) {
+            val delimIndex = lower.indexOf(delim)
+            if (delimIndex in 1 until earliestIndex) {
+                var afterDelim = lower.substring(delimIndex + delim.length).trimStart()
+                if (delim == " go to ") {
+                    afterDelim = "go to $afterDelim"
+                }
+                
+                val startsWithAction = actionKeywords.any { afterDelim.startsWith(it) } || delim == " go to "
+                
+                if (startsWithAction) {
+                    earliestIndex = delimIndex
+                    earliestDelim = delim
+                }
+            }
+        }
+        
+        if (earliestDelim != null) {
+            val first = lower.substring(0, earliestIndex).trim()
+            var second = lower.substring(earliestIndex + earliestDelim.length).trimStart()
+            if (earliestDelim == " go to ") {
+                second = "go to $second"
+            }
+            return listOf(first) + splitCompoundCommand(second)
+        }
+        
+        return listOf(input.lowercase().trim())
+    }
+
+    // ==========================================
+    // INTENT EXECUTION
+    // ==========================================
+
+    private suspend fun executeWithIntent(input: String, intent: Intent): String {
         val safety = safetyFramework.evaluate(input)
         if (!safety.isAllowed) {
             auditLogger.log("BLOCKED", input, safety.reason)
@@ -98,58 +176,64 @@ class NeuralAgent @Inject constructor(
         if (safety.requiresConsent) {
             auditLogger.log("CONSENT_REQUIRED", input, safety.reason)
         }
-        
+        return executeIntent(input, intent)
+    }
+
+    private suspend fun executeSingleCommand(input: String): String {
+        val safety = safetyFramework.evaluate(input)
+        if (!safety.isAllowed) {
+            auditLogger.log("BLOCKED", input, safety.reason)
+            return "⛔ ${safety.reason}"
+        }
+        if (safety.requiresConsent) {
+            auditLogger.log("CONSENT_REQUIRED", input, safety.reason)
+        }
         val intent = intentParser.parse(input)
+        return executeIntent(input, intent)
+    }
+
+    // ==========================================
+    // CORE INTENT ROUTER (ALL 28 INTENTS)
+    // ==========================================
+
+    private suspend fun executeIntent(input: String, intent: Intent): String {
+        val lower = input.lowercase().trim()
         
         return when (intent) {
+
+            // ── CHAT (LLM) ────────────────────────────────────────
             Intent.CHAT -> {
                 stateMachine.setState(AIState.THINKING, "GENERATING RESPONSE...")
                 val memoryContext = memoryRepository.searchContext(input)
-                val dynamicPrompt = if (memoryContext.contains("No specific memories")) {
-                    systemPrompt
-                } else {
-                    "$systemPrompt\n\n[System Context: $memoryContext]"
-                }
+                val dynamicPrompt = if (memoryContext.contains("No specific memories")) systemPrompt
+                else "$systemPrompt\n\n[System Context: $memoryContext]"
                 ollamaClient.chat(model = "qwen2.5:0.5b", systemPrompt = dynamicPrompt, userMessage = input)
             }
 
+            // ── WEB SEARCH ────────────────────────────────────────
             Intent.WEB_SEARCH -> {
-                val lower = input.lowercase()
-                if (lower.contains("open") || lower.contains("go to")) {
-                    stateMachine.setState(AIState.EXECUTING, "OPENING BROWSER...")
-                    val targetUrl = lower.replace("open", "").replace("go to", "").trim()
-                    browserSkill.openUrl(targetUrl)
-                    "Opening $targetUrl in your browser."
+                stateMachine.setState(AIState.EXECUTING, "SEARCHING THE WEB...")
+                val query = lower.replace("search", "").replace("for", "").replace("who is", "").replace("what is", "").replace("look up", "").trim()
+                val results = webSearchSkill.search(query)
+                if (results.isEmpty()) {
+                    "I couldn't find any search results for '$query'."
                 } else {
-                    stateMachine.setState(AIState.EXECUTING, "SEARCHING THE WEB...")
-                    val query = lower.replace("search", "").replace("for", "").replace("who is", "").replace("what is", "").trim()
-                    val results = webSearchSkill.search(query)
-                    if (results.isEmpty()) {
-                        "I couldn't find any search results for '$query'."
-                    } else {
-                        val topResult = results.first()
-                        stateMachine.setState(AIState.EXECUTING, "READING SITE DATA...")
-                        val pageText = webSearchSkill.fetchPage(topResult.url)
-                        stateMachine.setState(AIState.THINKING, "ANALYZING ARTICLE...")
-                        ollamaClient.chat(
-                            model = "qwen2.5:0.5b",
-                            systemPrompt = "You are a web reading assistant. Summarize the provided text to answer the query directly.",
-                            userMessage = "User Query: \"$input\"\nArticle: ${topResult.title}\n$pageText"
-                        )
-                    }
+                    val topResult = results.first()
+                    stateMachine.setState(AIState.EXECUTING, "READING SITE DATA...")
+                    val pageText = webSearchSkill.fetchPage(topResult.url)
+                    stateMachine.setState(AIState.THINKING, "ANALYZING ARTICLE...")
+                    ollamaClient.chat(
+                        model = "qwen2.5:0.5b",
+                        systemPrompt = "You are a web reading assistant. Summarize the provided text to answer the query directly.",
+                        userMessage = "User Query: \"$input\"\nArticle: ${topResult.title}\n$pageText"
+                    )
                 }
             }
 
+            // ── OPEN APP ──────────────────────────────────────────
             Intent.OPEN_APP -> {
                 stateMachine.setState(AIState.EXECUTING, "LAUNCHING APPLICATION...")
-                val lower = input.lowercase()
-                val pattern = Regex(".*(open|launch|start|run)\\s+(.+)")
-                val match = pattern.find(lower)
-                val appName = if (match != null) {
-                    match.groupValues[2].replace(Regex("\\s+(app|application|for me|please|bro|dude|man)$"), "").trim()
-                } else {
-                    lower.replace(Regex("(hey|hi|hello|bro|dude|neural|please|can you|could you|open|launch|start|run|the|a|an)"), "").trim()
-                }
+                val appName = extractAppName(lower)
                 if (appName.isBlank()) "Please specify an app name."
                 else {
                     val success = appControlSkill.launchApp(appName)
@@ -157,15 +241,36 @@ class NeuralAgent @Inject constructor(
                 }
             }
 
-            // ==========================================
-            // DEVICE AUTOMATION (Accessibility Service)
-            // ==========================================
+            // ── CLOSE APP ─────────────────────────────────────────
+            Intent.CLOSE_APP -> {
+                stateMachine.setState(AIState.EXECUTING, "CLOSING APPLICATION...")
+                val appName = lower.replace(Regex("\\b(close|exit|quit|kill|force stop|the|app|please)\\b"), "").trim()
+                if (appName.isBlank()) {
+                    appControlSkill.goBack()
+                    appControlSkill.goHome()
+                    "Closed current app."
+                } else {
+                    val success = appControlSkill.closeApp(appName)
+                    if (success) "Closed $appName." else "Could not close $appName."
+                }
+            }
 
+            // ── GO BACK ───────────────────────────────────────────
+            Intent.GO_BACK -> {
+                val success = appControlSkill.goBack()
+                if (success) "Pressed Back." else "Back action failed."
+            }
+
+            // ── GO HOME ───────────────────────────────────────────
+            Intent.GO_HOME -> {
+                val success = appControlSkill.goHome()
+                if (success) "Returned to Home screen." else "Home action failed."
+            }
+
+            // ── TAP ───────────────────────────────────────────────
             Intent.TAP -> {
                 stateMachine.setState(AIState.EXECUTING, "TAPPING ON SCREEN...")
-                val lower = input.lowercase()
-                val target = lower.replace("tap on", "").replace("click on", "").replace("press on", "")
-                    .replace("tap", "").replace("click", "").replace("press", "").trim()
+                val target = cleanTapTarget(lower)
                 if (!appControlSkill.isServiceActive()) {
                     "⚠️ Accessibility Service not enabled. Please enable Neural Agent in Settings > Accessibility."
                 } else {
@@ -174,32 +279,69 @@ class NeuralAgent @Inject constructor(
                 }
             }
 
-            Intent.TYPE_TEXT -> {
-                stateMachine.setState(AIState.EXECUTING, "TYPING TEXT...")
-                val lower = input.lowercase()
-                // Parse patterns like: "type hello in search" or "send message hi to John"
-                val textToType = extractTextToType(lower)
-                if (!appControlSkill.isServiceActive()) {
-                    "⚠️ Accessibility Service not enabled. Please enable Neural Agent in Settings > Accessibility."
-                } else {
-                    val success = appControlSkill.findAndType(null, textToType)
-                    if (success) "Typed: \"$textToType\"" else "Could not find a text field to type into."
-                }
-            }
-
-            Intent.SWIPE -> {
-                stateMachine.setState(AIState.EXECUTING, "SWIPING...")
-                val lower = input.lowercase()
+            // ── LONG PRESS ────────────────────────────────────────
+            Intent.LONG_PRESS -> {
+                stateMachine.setState(AIState.EXECUTING, "LONG PRESSING...")
+                val target = lower.replace(Regex("\\b(long\\s*press|long\\s*click|hold|press\\s*and\\s*hold|on|the)\\b"), "").trim()
                 if (!appControlSkill.isServiceActive()) {
                     "⚠️ Accessibility Service not enabled."
                 } else {
-                    val success = when {
-                        lower.contains("up") -> appControlSkill.swipeUp()
-                        lower.contains("down") -> appControlSkill.swipeDown()
-                        lower.contains("left") -> appControlSkill.swipeGesture(800f, 1000f, 200f, 1000f)
-                        lower.contains("right") -> appControlSkill.swipeGesture(200f, 1000f, 800f, 1000f)
-                        else -> appControlSkill.swipeUp()
+                    val success = appControlSkill.longPressOnScreen(target)
+                    if (success) "Long-pressed on \"$target\"." else "Could not find \"$target\" to long-press."
+                }
+            }
+
+            // ── TYPE TEXT ─────────────────────────────────────────
+            Intent.TYPE_TEXT -> {
+                stateMachine.setState(AIState.EXECUTING, "TYPING TEXT...")
+                
+                // WhatsApp contextual bypass
+                val isWhatsApp = appControlSkill.lastLaunchedApp == "whatsapp" || lower.contains("whatsapp")
+                if (isWhatsApp && lower.contains("send") && lower.contains(" to ")) {
+                    // Ensure WhatsApp is in the foreground first
+                    appControlSkill.launchApp("whatsapp")
+                    kotlinx.coroutines.delay(2000)
+                    
+                    val msg = lower.substringAfter("send ").substringBefore(" to ").replace("message", "").replace("text", "").trim()
+                    val rawContact = lower.substringAfter(" to ").trim()
+                    val contacts = phoneSkill.readContacts(rawContact)
+                    val phone = if (contacts.isNotEmpty()) contacts.first().phoneNumber else rawContact
+                    val success = phoneSkill.openWhatsAppChat(phone, msg)
+                    if (success) "Sending \"$msg\" to $rawContact on WhatsApp." else "Could not open WhatsApp chat."
+                }
+                // In-app search context
+                else if (lastOpenedApp != null && lower.contains("search")) {
+                    val query = lower.replace("search", "").replace("for", "").trim()
+                    if (!appControlSkill.isServiceActive()) {
+                        "⚠️ Accessibility Service not enabled."
+                    } else {
+                        // Tap the search icon/bar first
+                        appControlSkill.tapOnScreen("Search") ||
+                            appControlSkill.tapOnScreen("search") ||
+                            appControlSkill.tapOnScreen("🔍")
+                        kotlinx.coroutines.delay(1000)
+                        val typed = appControlSkill.findAndType(null, query)
+                        if (typed) "Searching for \"$query\" in $lastOpenedApp." else "Could not find a search field."
                     }
+                }
+                // Standard typing
+                else {
+                    val textToType = extractTextToType(lower)
+                    if (!appControlSkill.isServiceActive()) {
+                        "⚠️ Accessibility Service not enabled."
+                    } else {
+                        val success = appControlSkill.findAndType(null, textToType)
+                        if (success) "Typed: \"$textToType\"" else "Could not find a text field to type into."
+                    }
+                }
+            }
+
+            // ── SWIPE ─────────────────────────────────────────────
+            Intent.SWIPE -> {
+                stateMachine.setState(AIState.EXECUTING, "SWIPING...")
+                if (!appControlSkill.isServiceActive()) {
+                    "⚠️ Accessibility Service not enabled."
+                } else {
                     val direction = when {
                         lower.contains("up") -> "up"
                         lower.contains("down") -> "down"
@@ -207,22 +349,41 @@ class NeuralAgent @Inject constructor(
                         lower.contains("right") -> "right"
                         else -> "up"
                     }
+                    val success = when (direction) {
+                        "up" -> appControlSkill.swipeUp()
+                        "down" -> appControlSkill.swipeDown()
+                        "left" -> appControlSkill.swipeGesture(800f, 1000f, 200f, 1000f)
+                        "right" -> appControlSkill.swipeGesture(200f, 1000f, 800f, 1000f)
+                        else -> appControlSkill.swipeUp()
+                    }
                     if (success) "Swiped $direction." else "Swipe failed."
                 }
             }
 
+            // ── SCROLL (with optional timed loop) ─────────────────
             Intent.SCROLL -> {
                 stateMachine.setState(AIState.EXECUTING, "SCROLLING...")
-                val lower = input.lowercase()
                 if (!appControlSkill.isServiceActive()) {
                     "⚠️ Accessibility Service not enabled."
                 } else {
-                    val success = if (lower.contains("up") || lower.contains("top")) appControlSkill.swipeDown()
-                    else appControlSkill.swipeUp()
-                    if (success) "Scrolled ${if (lower.contains("up")) "up" else "down"}." else "Scroll failed."
+                    val durationMs = extractDurationMs(lower)
+                    if (durationMs > 0) {
+                        val scrollUp = lower.contains("up") || lower.contains("top")
+                        val endTime = System.currentTimeMillis() + durationMs
+                        while (System.currentTimeMillis() < endTime) {
+                            if (scrollUp) appControlSkill.swipeDown() else appControlSkill.swipeUp()
+                            kotlinx.coroutines.delay(2500)
+                        }
+                        "Finished scrolling."
+                    } else {
+                        val success = if (lower.contains("up") || lower.contains("top")) appControlSkill.swipeDown()
+                        else appControlSkill.swipeUp()
+                        if (success) "Scrolled ${if (lower.contains("up")) "up" else "down"}." else "Scroll failed."
+                    }
                 }
             }
 
+            // ── SCREENSHOT ────────────────────────────────────────
             Intent.SCREENSHOT -> {
                 stateMachine.setState(AIState.EXECUTING, "CAPTURING SCREENSHOT...")
                 if (!appControlSkill.isServiceActive()) {
@@ -234,201 +395,239 @@ class NeuralAgent @Inject constructor(
                         }
                         if (bitmap != null) {
                             stateMachine.setState(AIState.THINKING, "ANALYZING SCREENSHOT...")
-                            // Run ML Kit analysis on the screenshot
                             val objects = visionEngine.analyzeObjects(bitmap)
                             val text = visionEngine.readText(bitmap)
                             val faces = visionEngine.analyzeFaces(bitmap)
-
-                            val sb = StringBuilder("📸 Screenshot captured and analyzed:\n")
-                            if (objects.isNotEmpty()) {
-                                sb.appendLine("Objects: ${objects.joinToString { it.labels.joinToString { l -> l.text } }}")
-                            }
-                            if (text?.text?.isNotEmpty() == true) {
-                                sb.appendLine("Text found: ${text.text.take(300)}")
-                            }
-                            if (faces.isNotEmpty()) {
-                                sb.appendLine("Faces detected: ${faces.size}")
-                            }
+                            val sb = StringBuilder("📸 Screenshot captured:\n")
+                            if (objects.isNotEmpty()) sb.appendLine("Objects: ${objects.joinToString { it.labels.joinToString { l -> l.text } }}")
+                            if (text?.text?.isNotEmpty() == true) sb.appendLine("Text: ${text.text.take(300)}")
+                            if (faces.isNotEmpty()) sb.appendLine("Faces: ${faces.size}")
                             sb.toString()
                         } else {
-                            "Screenshot failed. Requires Android 11+ and Accessibility Service enabled."
+                            "Screenshot failed."
                         }
-                    } catch (e: Exception) {
-                        "Screenshot error: ${e.message}"
-                    }
+                    } catch (e: Exception) { "Screenshot error: ${e.message}" }
                 }
             }
 
+            // ── READ SCREEN ───────────────────────────────────────
             Intent.READ_SCREEN -> {
-                stateMachine.setState(AIState.EXECUTING, "READING SCREEN CONTENT...")
-                if (!appControlSkill.isServiceActive()) {
-                    "⚠️ Accessibility Service not enabled."
-                } else {
-                    val content = appControlSkill.readScreen()
-                    "📱 Screen Content:\n$content"
-                }
+                stateMachine.setState(AIState.EXECUTING, "READING SCREEN...")
+                if (!appControlSkill.isServiceActive()) "⚠️ Accessibility Service not enabled."
+                else "📱 Screen Content:\n${appControlSkill.readScreen()}"
             }
 
-            // ==========================================
-            // APP MANAGEMENT
-            // ==========================================
-
+            // ── INSTALL APP ───────────────────────────────────────
             Intent.INSTALL_APP -> {
                 stateMachine.setState(AIState.EXECUTING, "OPENING PLAY STORE...")
-                val lower = input.lowercase()
-                val appName = lower.replace("install", "").replace("app", "").replace("the", "").replace("please", "").trim()
-                if (appName.isBlank()) "Please specify an app name to install."
+                val appName = lower.replace(Regex("\\b(install|download|the|app|please)\\b"), "").trim()
+                if (appName.isBlank()) "Please specify an app name."
                 else {
                     val success = appControlSkill.installApp(appName)
-                    if (success) "Opening Play Store to install \"$appName\"."
-                    else "Could not open Play Store."
+                    if (success) "Opening Play Store for \"$appName\"." else "Could not open Play Store."
                 }
             }
 
+            // ── UNINSTALL APP ─────────────────────────────────────
             Intent.UNINSTALL_APP -> {
-                stateMachine.setState(AIState.EXECUTING, "UNINSTALLING APPLICATION...")
-                val lower = input.lowercase()
-                val appName = lower.replace("uninstall", "").replace("remove app", "").replace("delete app", "")
-                    .replace("app", "").replace("the", "").replace("please", "").trim()
-                if (appName.isBlank()) "Please specify an app name to uninstall."
+                stateMachine.setState(AIState.EXECUTING, "UNINSTALLING...")
+                val appName = lower.replace(Regex("\\b(uninstall|remove|delete|the|app|please)\\b"), "").trim()
+                if (appName.isBlank()) "Please specify an app name."
                 else {
                     val success = appControlSkill.uninstallApp(appName)
-                    if (success) "Opening uninstall prompt for \"$appName\"."
-                    else "Could not find \"$appName\" to uninstall."
+                    if (success) "Uninstall prompt for \"$appName\"." else "Could not find \"$appName\"."
                 }
             }
 
-            // ==========================================
-            // NOTIFICATIONS & SENSORS
-            // ==========================================
-
-            Intent.READ_NOTIFICATIONS -> {
-                stateMachine.setState(AIState.EXECUTING, "READING NOTIFICATIONS...")
-                val notifs = NeuralNotificationListener.getFormattedNotifications()
-                "🔔 Recent Notifications:\n$notifs"
+            // ── MEDIA CONTROL ─────────────────────────────────────
+            Intent.MEDIA_CONTROL -> {
+                stateMachine.setState(AIState.EXECUTING, "MEDIA CONTROL...")
+                deviceControlSkill.mediaControl(lower)
             }
 
+            // ── VOLUME CONTROL ────────────────────────────────────
+            Intent.VOLUME_CONTROL -> {
+                stateMachine.setState(AIState.EXECUTING, "ADJUSTING VOLUME...")
+                deviceControlSkill.setVolume(lower)
+            }
+
+            // ── BRIGHTNESS ────────────────────────────────────────
+            Intent.BRIGHTNESS -> {
+                stateMachine.setState(AIState.EXECUTING, "ADJUSTING BRIGHTNESS...")
+                deviceControlSkill.setBrightness(lower)
+            }
+
+            // ── TOGGLE SETTING (wifi, bluetooth, flashlight, etc.) ─
+            Intent.TOGGLE_SETTING -> {
+                stateMachine.setState(AIState.EXECUTING, "TOGGLING SETTING...")
+                deviceControlSkill.toggleSetting(lower)
+            }
+
+            // ── ALARM / TIMER ─────────────────────────────────────
+            Intent.ALARM_TIMER -> {
+                stateMachine.setState(AIState.EXECUTING, "SETTING ALARM/TIMER...")
+                deviceControlSkill.setAlarm(lower)
+            }
+
+            // ── TAKE PHOTO / VIDEO ────────────────────────────────
+            Intent.TAKE_PHOTO -> {
+                stateMachine.setState(AIState.EXECUTING, "OPENING CAMERA...")
+                deviceControlSkill.openCamera(lower)
+            }
+
+            // ── SHARE ─────────────────────────────────────────────
+            Intent.SHARE -> {
+                stateMachine.setState(AIState.EXECUTING, "SHARING...")
+                val textToShare = lower.replace(Regex("\\b(share|this|it|please)\\b"), "").trim()
+                if (textToShare.isBlank()) deviceControlSkill.shareText("Shared from Neural Agent")
+                else deviceControlSkill.shareText(textToShare)
+            }
+
+            // ── READ NOTIFICATIONS ────────────────────────────────
+            Intent.READ_NOTIFICATIONS -> {
+                stateMachine.setState(AIState.EXECUTING, "READING NOTIFICATIONS...")
+                "🔔 Recent Notifications:\n${NeuralNotificationListener.getFormattedNotifications()}"
+            }
+
+            // ── SENSOR DATA ───────────────────────────────────────
             Intent.SENSOR_DATA -> {
                 stateMachine.setState(AIState.EXECUTING, "READING SENSORS...")
                 sensorSkill.getSensorData()
             }
 
-            // ==========================================
-            // EXISTING INTENTS
-            // ==========================================
-
+            // ── VISION ANALYZE ────────────────────────────────────
             Intent.VISION_ANALYZE -> {
-                stateMachine.setState(AIState.EXECUTING, "INITIALIZING OPTICS...")
+                stateMachine.setState(AIState.EXECUTING, "ANALYZING VISUAL DATA...")
                 if (appControlSkill.isServiceActive()) {
                     try {
                         val bitmap = suspendCancellableCoroutine<android.graphics.Bitmap?> { cont ->
                             appControlSkill.takeScreenshot { bmp -> cont.resume(bmp) }
                         }
                         if (bitmap != null) {
-                            stateMachine.setState(AIState.THINKING, "ANALYZING VISUAL DATA...")
                             val objects = visionEngine.analyzeObjects(bitmap)
                             val text = visionEngine.readText(bitmap)
                             val faces = visionEngine.analyzeFaces(bitmap)
                             val sb = StringBuilder("👁️ Visual Analysis:\n")
                             if (objects.isNotEmpty()) sb.appendLine("Objects: ${objects.joinToString { it.labels.joinToString { l -> l.text } }}")
                             if (text?.text?.isNotEmpty() == true) sb.appendLine("Text: ${text.text.take(500)}")
-                            if (faces.isNotEmpty()) sb.appendLine("Faces: ${faces.size} detected")
-                            if (objects.isEmpty() && (text?.text?.isEmpty() != false) && faces.isEmpty()) sb.appendLine("No significant elements detected.")
+                            if (faces.isNotEmpty()) sb.appendLine("Faces: ${faces.size}")
                             sb.toString()
-                        } else {
-                            "Optics are online. Please tap the Camera Quick Action to open the live feed."
-                        }
-                    } catch (_: Exception) {
-                        "Optics are online. Please tap the Camera Quick Action to open the live feed."
-                    }
-                } else {
-                    "Optics are online. Enable Accessibility Service for screenshot analysis, or tap Camera Quick Action."
-                }
+                        } else "Could not capture screen for analysis."
+                    } catch (_: Exception) { "Visual analysis failed. Try Camera Quick Action." }
+                } else "Enable Accessibility Service for visual analysis."
             }
 
+            // ── TRADING ───────────────────────────────────────────
             Intent.TRADING -> {
                 stateMachine.setState(AIState.EXECUTING, "ACCESSING TERMINAL...")
-                "Trading Terminal is online. Navigate to the Trading screen to view live charts and run AI analysis."
+                "Trading Terminal is online. Navigate to the Trading screen."
             }
 
+            // ── MEMORY RECALL ─────────────────────────────────────
             Intent.MEMORY_RECALL -> {
-                val lower = input.lowercase()
                 if (lower.contains("remember")) {
-                    stateMachine.setState(AIState.EXECUTING, "STORING MEMORY...")
-                    val factToRemember = lower.replace("remember that", "").replace("remember", "").trim()
-                    memoryRepository.storeMemory(factToRemember)
-                    "Memory stored: $factToRemember."
+                    val fact = lower.replace("remember that", "").replace("remember", "").trim()
+                    memoryRepository.storeMemory(fact)
+                    "Memory stored: $fact."
                 } else {
-                    stateMachine.setState(AIState.THINKING, "SEARCHING MEMORY BANKS...")
                     "I remember: " + memoryRepository.searchContext(input)
                 }
             }
 
+            // ── SYSTEM CONTROL ────────────────────────────────────
             Intent.SYSTEM_CONTROL -> {
-                stateMachine.setState(AIState.EXECUTING, "EXECUTING SYSTEM ACTION...")
-                handleSystemControl(input)
+                stateMachine.setState(AIState.EXECUTING, "SYSTEM ACTION...")
+                handleSystemControl(lower)
             }
         }
     }
 
-    /**
-     * Extract the text to type from user input.
-     * Handles: "type hello", "send message hi", "type 'hello world' in search"
-     */
+    // ==========================================
+    // HELPER FUNCTIONS
+    // ==========================================
+
+    private fun extractAppName(input: String): String {
+        val pattern = Regex(".*(open|launch|start|run)\\s+(.+)")
+        val match = pattern.find(input)
+        return if (match != null) {
+            match.groupValues[2].replace(Regex("\\s+(app|application|for me|please|bro|dude|man)$"), "").trim()
+        } else {
+            input.replace(Regex("(hey|hi|hello|bro|dude|neural|please|can you|could you|open|launch|start|run|the|a|an)"), "").trim()
+        }
+    }
+
+    private fun cleanTapTarget(input: String): String {
+        val fillerWords = listOf("section", "tab", "page", "button", "icon", "menu", "bar", "area", "panel", "option", "link", "the", "a", "an", "on", "in")
+        var target = input
+            .replace("tap on", "").replace("click on", "").replace("press on", "")
+            .replace("go to", "").replace("navigate to", "")
+            .replace("tap", "").replace("click", "").replace("press", "")
+            .trim()
+        for (filler in fillerWords) {
+            target = target.replace(Regex("\\b$filler\\b"), "").trim()
+        }
+        target = target.replace(Regex("\\s+"), " ").trim()
+        return target.replaceFirstChar { it.uppercase() }
+    }
+
     private fun extractTextToType(input: String): String {
-        // Try quoted text first
         val quoted = Regex("[\"'](.+?)[\"']").find(input)
         if (quoted != null) return quoted.groupValues[1]
 
-        // "type X into/in Y" or "type X"
         val typeMatch = Regex("type\\s+(.+?)(?:\\s+(?:into|in|on)\\s+|$)").find(input)
         if (typeMatch != null) return typeMatch.groupValues[1].trim()
 
-        // "send message X" or "send text X"
         val sendMatch = Regex("(?:send|write)\\s+(?:message|text|sms)?\\s*(.+?)(?:\\s+to\\s+|$)").find(input)
         if (sendMatch != null) return sendMatch.groupValues[1].trim()
 
-        // Fallback: everything after "type"
-        return input.substringAfter("type ", input).trim()
+        val searchMatch = Regex("search\\s+(?:for\\s+)?(.+)").find(input)
+        if (searchMatch != null) return searchMatch.groupValues[1].trim()
+
+        return input.substringAfter("type ", input).substringAfter("send ", input).trim()
+    }
+
+    private fun extractDurationMs(input: String): Long {
+        val match = Regex("for\\s+(\\d+)\\s*(minute|minutes|min|mins|second|seconds|sec|secs|hour|hours|hr|hrs)").find(input)
+        if (match != null) {
+            val amount = match.groupValues[1].toLongOrNull() ?: 1L
+            val unit = match.groupValues[2]
+            return when {
+                unit.startsWith("hour") || unit.startsWith("hr") -> amount * 3600 * 1000L
+                unit.startsWith("min") -> amount * 60 * 1000L
+                unit.startsWith("sec") -> amount * 1000L
+                else -> 0L
+            }
+        }
+        return 0L
     }
 
     private suspend fun handleSystemControl(input: String): String {
-        val lower = input.lowercase()
-        
         return when {
-            lower.contains("location") || lower.contains("where am i") || lower.contains("gps") -> {
+            input.contains("location") || input.contains("where am i") || input.contains("gps") -> {
                 locationSkill.getLocationString()
             }
-            lower.contains("call") -> {
-                val target = lower.replace("call", "").trim()
+            input.contains("call") -> {
+                val target = input.replace("call", "").trim()
                 val contacts = phoneSkill.readContacts(target)
                 if (contacts.isNotEmpty()) {
                     val contact = contacts.first()
                     phoneSkill.makeCall(contact.phoneNumber)
-                    "Calling ${contact.name} at ${contact.phoneNumber}."
+                    "Calling ${contact.name}."
                 } else {
                     phoneSkill.makeCall(target)
                     "Calling $target."
                 }
             }
-            lower.contains("send") && (lower.contains("sms") || lower.contains("message") || lower.contains("text")) -> {
-                "SMS skill is ready. Please provide a contact name and message in the format: 'send sms to [name]: [message]'."
+            input.contains("send") && (input.contains("sms") || input.contains("message") || input.contains("text")) -> {
+                "SMS skill ready. Format: 'send sms to [name]: [message]'."
             }
-            lower.contains("notify") || lower.contains("notification") -> {
-                notificationSkill.showNotification("Neural Agent", "System notification triggered by voice command.")
-                "Notification posted."
+            input.contains("back") -> {
+                if (appControlSkill.goBack()) "Pressed Back." else "Back failed."
             }
-            lower.contains("back") -> {
-                val success = appControlSkill.goBack()
-                if (success) "Pressed Back." else "Back action failed."
+            input.contains("home") -> {
+                if (appControlSkill.goHome()) "Home." else "Home failed."
             }
-            lower.contains("home") -> {
-                val success = appControlSkill.goHome()
-                if (success) "Pressed Home." else "Home action failed."
-            }
-            else -> {
-                "System control acknowledged. Available: location, call, send sms, notify, back, home."
-            }
+            else -> "System control: location, call, sms, back, home."
         }
     }
 }

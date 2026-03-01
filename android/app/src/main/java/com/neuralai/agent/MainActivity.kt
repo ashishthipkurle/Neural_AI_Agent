@@ -14,6 +14,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import android.provider.Settings
+import android.net.Uri
 import com.neuralai.agent.ui.navigation.AppNavigation
 import com.neuralai.agent.ui.theme.NeuralAgentTheme
 
@@ -23,16 +25,14 @@ class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val recordAudioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
-        if (recordAudioGranted) {
-            startWakeWordService()
-        }
+        // Permissions granted — wake word service is user-activated, not auto-started
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
         requestRequiredPermissions()
+        checkOverlayPermission()
 
         setContent {
             NeuralAgentTheme {
@@ -66,9 +66,18 @@ class MainActivity : ComponentActivity() {
 
         if (ungrantedPermissions.isNotEmpty()) {
             requestPermissionLauncher.launch(ungrantedPermissions.toTypedArray())
-        } else {
-            // Already granted, auto-start service
-            startWakeWordService()
+        }
+        // Wake word service is NOT auto-started — user can enable it from the Agent screen
+    }
+    private fun checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+            }
         }
     }
     

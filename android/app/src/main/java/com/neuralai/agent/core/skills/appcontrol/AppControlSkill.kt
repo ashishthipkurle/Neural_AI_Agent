@@ -1,9 +1,11 @@
 package com.neuralai.agent.core.skills.appcontrol
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.neuralai.agent.services.AccessibilityControlService
+import com.neuralai.agent.services.WakeWordService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import javax.inject.Inject
@@ -32,6 +34,9 @@ class AppControlSkill @Inject constructor(
     private val accessibilityService: AccessibilityControlService?
         get() = AccessibilityControlService.instance.value
 
+    var lastLaunchedApp: String? = null
+        private set
+
     fun isServiceActive(): Boolean {
         return accessibilityService != null
     }
@@ -48,8 +53,16 @@ class AppControlSkill @Inject constructor(
         if (knownPackage != null) {
             val intent = context.packageManager.getLaunchIntentForPackage(knownPackage)
             if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                // Route through our visible foreground service to bypass Android 10+ background restrictions
+                val wakeService = WakeWordService.instance.value
+                val accService = accessibilityService
+                when {
+                    wakeService != null -> wakeService.startActivity(intent)
+                    accService != null -> accService.startActivity(intent)
+                    else -> context.startActivity(intent)
+                }
+                lastLaunchedApp = lower
                 return true
             }
         }
@@ -62,8 +75,15 @@ class AppControlSkill @Inject constructor(
             if (label.contains(lower) || lower.contains(label)) {
                 val intent = pm.getLaunchIntentForPackage(app.packageName)
                 if (intent != null) {
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    val wakeService = WakeWordService.instance.value
+                    val accService = accessibilityService
+                    when {
+                        wakeService != null -> wakeService.startActivity(intent)
+                        accService != null -> accService.startActivity(intent)
+                        else -> context.startActivity(intent)
+                    }
+                    lastLaunchedApp = lower
                     return true
                 }
             }
@@ -80,7 +100,13 @@ class AppControlSkill @Inject constructor(
         try {
             val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            val wakeService = WakeWordService.instance.value
+            val accService = accessibilityService
+            when {
+                wakeService != null -> wakeService.startActivity(intent)
+                accService != null -> accService.startActivity(intent)
+                else -> context.startActivity(intent)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -156,13 +182,25 @@ class AppControlSkill @Inject constructor(
         return try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$appName"))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            val wakeService = WakeWordService.instance.value
+            val accService = accessibilityService
+            when {
+                wakeService != null -> wakeService.startActivity(intent)
+                accService != null -> accService.startActivity(intent)
+                else -> context.startActivity(intent)
+            }
             true
         } catch (e: Exception) {
             try {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=$appName"))
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
+                val wakeService = WakeWordService.instance.value
+                val accService = accessibilityService
+                when {
+                    wakeService != null -> wakeService.startActivity(intent)
+                    accService != null -> accService.startActivity(intent)
+                    else -> context.startActivity(intent)
+                }
                 true
             } catch (_: Exception) { false }
         }
@@ -186,7 +224,13 @@ class AppControlSkill @Inject constructor(
             return try {
                 val intent = Intent(Intent.ACTION_DELETE, Uri.parse("package:$packageName"))
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
+                val wakeService = WakeWordService.instance.value
+                val accService = accessibilityService
+                when {
+                    wakeService != null -> wakeService.startActivity(intent)
+                    accService != null -> accService.startActivity(intent)
+                    else -> context.startActivity(intent)
+                }
                 true
             } catch (_: Exception) { false }
         }
@@ -219,5 +263,37 @@ class AppControlSkill @Inject constructor(
     fun swipeGesture(startX: Float, startY: Float, endX: Float, endY: Float): Boolean {
         val service = accessibilityService ?: return false
         return service.swipe(startX, startY, endX, endY)
+    }
+
+    /**
+     * Force-stops an application by package name or display name.
+     */
+    fun closeApp(appName: String): Boolean {
+        val lower = appName.lowercase().trim()
+        val packageName = appMap[lower] ?: run {
+            val pm = context.packageManager
+            pm.getInstalledApplications(0).firstOrNull {
+                pm.getApplicationLabel(it).toString().lowercase().contains(lower)
+            }?.packageName
+        }
+        if (packageName != null) {
+            try {
+                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                am.killBackgroundProcesses(packageName)
+                return true
+            } catch (_: Exception) { }
+        }
+        // Fallback: press Back + Home to leave the app
+        goBack()
+        goHome()
+        return true
+    }
+
+    /**
+     * Long-presses an element matching the text.
+     */
+    fun longPressOnScreen(text: String): Boolean {
+        val service = accessibilityService ?: return false
+        return service.longClickElement(text)
     }
 }

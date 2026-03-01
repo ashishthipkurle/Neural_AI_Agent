@@ -107,6 +107,18 @@ class AccessibilityControlService : AccessibilityService() {
         return targetNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
     }
 
+    fun longClickElement(text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val node = findNodeByText(root, text)
+        
+        var targetNode = node
+        while (targetNode != null && !targetNode.isLongClickable) {
+            targetNode = targetNode.parent
+        }
+        
+        return targetNode?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) ?: false
+    }
+
     fun tapCoordinates(x: Float, y: Float): Boolean {
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
@@ -178,7 +190,12 @@ class AccessibilityControlService : AccessibilityService() {
             val args = Bundle().apply {
                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
             }
-            return focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            val result = focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            // Try to trigger the IME action (Done/Search)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                focused.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+            }
+            return result
         }
 
         // Strategy 2: Find editable by scanning tree
@@ -188,7 +205,11 @@ class AccessibilityControlService : AccessibilityService() {
             val args = Bundle().apply {
                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
             }
-            return editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            val result = editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                editable.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+            }
+            return result
         }
 
         return false

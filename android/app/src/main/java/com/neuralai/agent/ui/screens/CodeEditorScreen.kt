@@ -184,7 +184,7 @@ fun CodeEditorScreen(
                         }
                     }
 
-                    if (fileTree.isEmpty()) {
+                    if (viewModel.projectUri.value == null) {
                         Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("No folder open", color = ObsDimText.copy(alpha = 0.5f), fontSize = 11.sp)
@@ -195,6 +195,14 @@ fun CodeEditorScreen(
                                     modifier = Modifier.height(28.dp),
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
                                 ) { Text("Open Folder", fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
+                            }
+                        }
+                    } else if (fileTree.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Empty folder", color = ObsDimText.copy(alpha = 0.5f), fontSize = 11.sp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Use the Agent to generate code", color = ObsDimText.copy(alpha = 0.3f), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
                             }
                         }
                     } else {
@@ -216,19 +224,58 @@ fun CodeEditorScreen(
             // ===== Editor Area =====
             Column(modifier = Modifier.weight(1f)) {
                 // Tab bar
-                if (selectedFileName.isNotEmpty()) {
-                    Row(modifier = Modifier.fillMaxWidth().background(Color(0xFF0C0C10)).padding(vertical = 2.dp)) {
-                        Box(
+                if (viewModel.openTabs.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0C0C10))
+                            .padding(top = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Scrollable Tabs List
+                        Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                                .background(ObsBg)
-                                .padding(horizontal = 12.dp, vertical = 5.dp)
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState())
                         ) {
-                            Text(
-                                "${if (isEdited) "● " else ""}$selectedFileName",
-                                fontFamily = FontFamily.Monospace, fontSize = 11.sp,
-                                color = if (isEdited) Color(0xFFFFC107) else ObsText
-                            )
+                            viewModel.openTabs.forEach { tab ->
+                                val isActive = tab.uri == selectedFileUri
+                                // If the tab is currently active, use the real-time isEdited state, otherwise use the saved tab state
+                                val isTabEdited = if (isActive) isEdited else tab.isEdited
+                                
+                                Row(
+                                    modifier = Modifier
+                                        .padding(end = 2.dp)
+                                        .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                                        .background(if (isActive) ObsBg else Color(0xFF1E1E2A))
+                                        .clickable { viewModel.selectTab(tab.uri) }
+                                        .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "${if (isTabEdited) "● " else ""}${tab.name}",
+                                        fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                                        color = if (isTabEdited) Color(0xFFFFC107) else if (isActive) ObsText else ObsDimText
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    IconButton(
+                                        onClick = { viewModel.closeTab(tab.uri) },
+                                        modifier = Modifier.size(16.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Close, "Close", tint = ObsDimText, modifier = Modifier.size(12.dp))
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Global Save for active file
+                        if (isEdited) {
+                            IconButton(
+                                onClick = { viewModel.saveCurrentFile() },
+                                modifier = Modifier.size(28.dp).padding(horizontal = 4.dp)
+                            ) {
+                                Icon(Icons.Filled.Save, "Save", tint = ObsAccent, modifier = Modifier.size(14.dp))
+                            }
                         }
                     }
                 }
