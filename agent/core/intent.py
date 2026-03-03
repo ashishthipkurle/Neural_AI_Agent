@@ -509,7 +509,7 @@ class IntentParser:
         
         AVAILABLE TOOLS:
         - chat_tool(message): General conversation.
-        - launch_app(app_name, extra_args): Launch an application.
+        - launch_app(app_name, extra_args): Launch an application (200+ apps supported: notepad, chrome, vscode, photoshop, teams, slack, discord, etc.).
         - delete_path(path, recursive): Delete a file or directory path.
         - store_memory(text): Save a fact/event to long-term memory.
         - search_memory(query): specific recall.
@@ -543,6 +543,25 @@ class IntentParser:
         - telegram_send_message(message): Send a text message via Telegram API (for reporting results).
         - telegram_check_messages(): Check for new messages.
         
+        PC SYSTEM CONTROL TOOLS:
+        - system_power(operation): Control power: shutdown, restart, hibernate, sleep, lock, logoff, cancel_shutdown, switch_user.
+        - volume(direction, step, level, action): Control audio volume: up/down by step, set level 0-100, mute/unmute/toggle_mute/mute_mic/unmute_mic.
+        - brightness(direction, step, level): Control screen brightness: up/down by step, or set 0-100.
+        - display_control(mode, night_light, resolution, rotate): Display settings: dark/light mode, night light on/off, change resolution, rotate screen, mirror/extend displays.
+        - window_management(operation, position): Window management: minimize_all, show_desktop, close_all, task_view, snap (left/right/top_left/top_right/bottom_left/bottom_right), always_on_top, tile_all, cascade.
+        - virtual_desktop(operation, desktop_number): Virtual desktops: create, close, switch to desktop N.
+        - open_settings(page): Open Windows Settings page: display, sound, notifications, privacy, windowsupdate, network, bluetooth, mousetouchpad, printers, appsfeatures, defaultapps, startupapps, powersleep, batterysaver.
+        - network_control(operation): Network tools: show_ip, flush_dns, speed_test, check_connectivity, status, connect_vpn, disconnect_vpn, enable_wifi, disable_wifi, scan_wifi.
+        - screenshot(mode): Take a screenshot: full, region, active_window, all_monitors.
+        - screen_record(action): Screen recording: start, stop (via Xbox Game Bar).
+        - file_navigate(location): Open a folder: documents, downloads, desktop, pictures, videos, music, home.
+        - file_search(query, location): Search for files on the system.
+        - disk_management(operation): Disk tools: disk_cleanup, defrag, chkdsk, usage.
+        - accessibility(feature, enable): Accessibility: magnifier, narrator, on_screen_keyboard, color_filters, high_contrast.
+        - wallpaper(action, image_path): Wallpaper control: change wallpaper, open settings.
+        - clipboard_history(action): Clipboard: show history, clear.
+        - bluetooth(operation): Bluetooth settings.
+        
         RESPONSE FORMAT:
         Always output valid JSON.
         If multiple actions are needed, return a JSON array of actions.
@@ -568,6 +587,9 @@ class IntentParser:
         3. IF USER WANTS TO LAUNCH AN APP: Use 'launch_app'.
            - "Open Edge" -> { "action": "launch_app", "parameters": { "app_name": "edge" } }
            - "Open Notepad" -> { "action": "launch_app", "parameters": { "app_name": "notepad" } }
+           - "Open Photoshop" -> { "action": "launch_app", "parameters": { "app_name": "photoshop" } }
+           - "Open Docker" -> { "action": "launch_app", "parameters": { "app_name": "docker" } }
+           - "Open 1Password" -> { "action": "launch_app", "parameters": { "app_name": "1password" } }
            - CRITICAL: Do NOT invent tools like 'open_edge' or 'open_app_tool'. Use ONLY 'launch_app'.
         
         4. IF USER WANTS TO BROWSE:
@@ -596,6 +618,29 @@ class IntentParser:
            - "Call my friend" -> { "action": "make_call", "parameters": { "contact_name": "friend" } }
            - "Call 555-0199" -> { "action": "make_call", "parameters": { "phone_number": "555-0199" } }
            - "Call John and ask about lunch" -> { "action": "make_call", "parameters": { "contact_name": "John", "purpose": "Ask about lunch" } }
+        
+        8. IF USER WANTS PC SYSTEM CONTROL (use these EXACT tool names):
+           - "Shut down the computer" -> { "action": "system_power", "parameters": { "operation": "shutdown" } }
+           - "Restart" -> { "action": "system_power", "parameters": { "operation": "restart" } }
+           - "Lock the screen" -> { "action": "system_power", "parameters": { "operation": "lock" } }
+           - "Increase volume" -> { "action": "volume", "parameters": { "direction": "up", "step": 10 } }
+           - "Set volume to 50" -> { "action": "volume", "parameters": { "level": 50 } }
+           - "Mute" -> { "action": "volume", "parameters": { "action": "mute" } }
+           - "Increase brightness" -> { "action": "brightness", "parameters": { "direction": "up", "step": 10 } }
+           - "Turn on dark mode" -> { "action": "display_control", "parameters": { "mode": "dark" } }
+           - "Snap window to left" -> { "action": "window_management", "parameters": { "operation": "snap", "position": "left" } }
+           - "Minimize all windows" -> { "action": "window_management", "parameters": { "operation": "minimize_all" } }
+           - "Open display settings" -> { "action": "open_settings", "parameters": { "page": "display" } }
+           - "Show my IP address" -> { "action": "network_control", "parameters": { "operation": "show_ip" } }
+           - "Flush DNS" -> { "action": "network_control", "parameters": { "operation": "flush_dns" } }
+           - "Go to Documents" -> { "action": "file_navigate", "parameters": { "location": "documents" } }
+           - "Empty recycle bin" -> { "action": "disk_management", "parameters": { "operation": "empty_recycle_bin" } }
+           - "Start screen recording" -> { "action": "screen_record", "parameters": { "action": "start" } }
+           - "Create a new virtual desktop" -> { "action": "virtual_desktop", "parameters": { "operation": "create" } }
+           - "Open magnifier" -> { "action": "accessibility", "parameters": { "feature": "magnifier" } }
+           - "Change wallpaper" -> { "action": "wallpaper", "parameters": { "action": "change" } }
+           - "Show clipboard history" -> { "action": "clipboard_history", "parameters": { "action": "show" } }
+           - CRITICAL: Do NOT invent tools. Use ONLY the tools listed above.
         """
         
         try:
@@ -860,6 +905,77 @@ class IntentParser:
                 if not url.startswith("http"):
                     url = f"https://{url}"
                 intents.append(Intent(action="browser_navigate", tool_name="browser_navigate", parameters={"url": url}))
+
+        # ==================== PC SYSTEM COMMAND KEYWORD OVERRIDES ====================
+        # These catch system commands when the LLM is unavailable
+
+        # Power commands
+        if any(k in u for k in ["shut down", "shutdown", "power off", "turn off the computer", "turn off the pc"]):
+            return [Intent(action="system_power", tool_name="system_power", parameters={"operation": "shutdown"}, confidence=0.95)]
+        if any(k in u for k in ["restart", "reboot"]):
+            return [Intent(action="system_power", tool_name="system_power", parameters={"operation": "restart"}, confidence=0.95)]
+        if u in ["hibernate"]:
+            return [Intent(action="system_power", tool_name="system_power", parameters={"operation": "hibernate"}, confidence=0.95)]
+        if any(k in u for k in ["put the computer to sleep", "put my computer to sleep"]) or u == "sleep":
+            return [Intent(action="system_power", tool_name="system_power", parameters={"operation": "sleep"}, confidence=0.95)]
+        if any(k in u for k in ["lock the screen", "lock the computer", "lock my computer", "lock screen"]):
+            return [Intent(action="system_power", tool_name="system_power", parameters={"operation": "lock"}, confidence=0.95)]
+        if any(k in u for k in ["log off", "sign out"]):
+            return [Intent(action="system_power", tool_name="system_power", parameters={"operation": "logoff"}, confidence=0.95)]
+
+        # Volume commands
+        if any(k in u for k in ["increase volume", "volume up", "turn up the volume", "louder"]):
+            return [Intent(action="volume", tool_name="volume", parameters={"direction": "up", "step": 10}, confidence=0.95)]
+        if any(k in u for k in ["decrease volume", "volume down", "turn down the volume", "quieter", "softer"]):
+            return [Intent(action="volume", tool_name="volume", parameters={"direction": "down", "step": 10}, confidence=0.95)]
+        if u in ["mute", "mute audio", "mute sound"]:
+            return [Intent(action="volume", tool_name="volume", parameters={"action": "mute"}, confidence=0.95)]
+        if u in ["unmute", "unmute audio", "unmute sound"]:
+            return [Intent(action="volume", tool_name="volume", parameters={"action": "unmute"}, confidence=0.95)]
+
+        # Brightness commands
+        if any(k in u for k in ["increase brightness", "brightness up", "brighter", "turn up the brightness"]):
+            return [Intent(action="brightness", tool_name="brightness", parameters={"direction": "up", "step": 10}, confidence=0.95)]
+        if any(k in u for k in ["decrease brightness", "brightness down", "dimmer", "turn down the brightness"]):
+            return [Intent(action="brightness", tool_name="brightness", parameters={"direction": "down", "step": 10}, confidence=0.95)]
+
+        # Display commands
+        if any(k in u for k in ["dark mode", "enable dark mode", "turn on dark mode"]):
+            return [Intent(action="display_control", tool_name="display_control", parameters={"mode": "dark"}, confidence=0.95)]
+        if any(k in u for k in ["light mode", "disable dark mode", "turn off dark mode"]):
+            return [Intent(action="display_control", tool_name="display_control", parameters={"mode": "light"}, confidence=0.95)]
+
+        # Window management
+        if any(k in u for k in ["minimize all", "show desktop", "hide all windows"]):
+            return [Intent(action="window_management", tool_name="window_management", parameters={"operation": "minimize_all"}, confidence=0.95)]
+        if any(k in u for k in ["task view", "show all open windows"]):
+            return [Intent(action="window_management", tool_name="window_management", parameters={"operation": "task_view"}, confidence=0.95)]
+
+        # Screenshot
+        if any(k in u for k in ["take a screenshot", "take screenshot", "screenshot"]):
+            return [Intent(action="screenshot", tool_name="screenshot", parameters={"mode": "full"}, confidence=0.95)]
+        if "start screen recording" in u:
+            return [Intent(action="screen_record", tool_name="screen_record", parameters={"action": "start"}, confidence=0.95)]
+        if "stop screen recording" in u:
+            return [Intent(action="screen_record", tool_name="screen_record", parameters={"action": "stop"}, confidence=0.95)]
+
+        # Network
+        if any(k in u for k in ["show my ip", "what's my ip", "what is my ip"]):
+            return [Intent(action="network_control", tool_name="network_control", parameters={"operation": "show_ip"}, confidence=0.95)]
+        if any(k in u for k in ["flush dns", "flush dns cache"]):
+            return [Intent(action="network_control", tool_name="network_control", parameters={"operation": "flush_dns"}, confidence=0.95)]
+        if any(k in u for k in ["speed test", "run speed test", "test bandwidth"]):
+            return [Intent(action="network_control", tool_name="network_control", parameters={"operation": "speed_test"}, confidence=0.95)]
+
+        # Settings
+        if "check for updates" in u or "check for windows update" in u:
+            return [Intent(action="open_settings", tool_name="open_settings", parameters={"page": "windowsupdate"}, confidence=0.95)]
+
+        # File management
+        if any(k in u for k in ["empty the recycle bin", "empty recycle bin"]):
+            return [Intent(action="disk_management", tool_name="disk_management", parameters={"operation": "empty_recycle_bin"}, confidence=0.95)]
+        if "disk cleanup" in u or "run disk cleanup" in u:
+            return [Intent(action="disk_management", tool_name="disk_management", parameters={"operation": "disk_cleanup"}, confidence=0.95)]
 
         if not intents:
              return [Intent(action="unknown", reasoning="Fallback parser could not understand.")]
