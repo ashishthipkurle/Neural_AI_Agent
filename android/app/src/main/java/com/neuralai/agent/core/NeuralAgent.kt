@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import com.neuralai.agent.core.skills.appcontrol.AppControlSkill
 import com.neuralai.agent.core.skills.phone.PhoneSkill
+import com.neuralai.agent.core.skills.phone.AutonomousCallSkill
 import com.neuralai.agent.core.skills.location.LocationSkill
 import com.neuralai.agent.core.skills.notification.NotificationSkill
 import com.neuralai.agent.core.skills.research.BrowserSkill
@@ -20,6 +21,9 @@ import com.neuralai.agent.core.security.SafetyFramework
 import com.neuralai.agent.core.security.AuditLogger
 import com.neuralai.agent.core.voice.TTSEngine
 import com.neuralai.agent.services.NeuralNotificationListener
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.delay
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
@@ -43,7 +47,9 @@ class NeuralAgent @Inject constructor(
     private val deviceControlSkill: DeviceControlSkill,
     private val agentGraph: AgentGraph,
     private val safetyFramework: SafetyFramework,
-    private val auditLogger: AuditLogger
+    private val auditLogger: AuditLogger,
+    private val autonomousCallSkill: AutonomousCallSkill,
+    @ApplicationContext private val context: Context
 ) {
     private val systemPrompt = """
         You are Neural, an advanced AI agent running directly on the user's Android device. 
@@ -534,6 +540,62 @@ class NeuralAgent @Inject constructor(
                 }
             }
 
+            // ── AUTONOMOUS CALL ──────────────────────────────────
+            Intent.AUTONOMOUS_CALL -> {
+                stateMachine.setState(AIState.EXECUTING, "AUTONOMOUS CALL STARTING...")
+                handleAutonomousCall(lower)
+            }
+
+            // ── AUTO-ANSWER TOGGLE ───────────────────────────────
+            Intent.AUTO_ANSWER_TOGGLE -> {
+                val isDisable = lower.contains("stop") || lower.contains("disable") || lower.contains("turn off") || lower.contains("don't")
+                if (isDisable) {
+                    autonomousCallSkill.setAutoAnswerEnabled(false)
+                } else {
+                    autonomousCallSkill.setAutoAnswerEnabled(
+                        enabled = true,
+                        purpose = "Answer calls on behalf of ${lower.substringAfter("behalf of").trim().ifBlank { "the user" }}",
+                        onUpdate = { update ->
+                            android.util.Log.d("NeuralAgent", "AutoAnswer: $update")
+                        },
+                        onComplete = { summary ->
+                            android.util.Log.d("NeuralAgent", "AutoAnswer complete: ${summary.take(200)}")
+                        }
+                    )
+                }
+            }
+
+            // ── ACCEPT INCOMING CALL ─────────────────────────────
+            Intent.ACCEPT_CALL -> {
+                stateMachine.setState(AIState.EXECUTING, "ANSWERING CALL...")
+                // Answer the ringing call and start autonomous conversation
+                try {
+                    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as? android.telecom.TelecomManager
+                    telecomManager?.acceptRingingCall()
+                    delay(2000) // Wait for call to connect
+
+                    // Enable speakerphone
+                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                    audioManager.isSpeakerphoneOn = true
+                    val maxVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                    audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, maxVol, 0)
+
+                    // Start autonomous conversation on the active call
+                    autonomousCallSkill.startConversationOnActiveCall(
+                        callerName = "Incoming Caller",
+                        purpose = "Answer the call and assist the caller on behalf of the user",
+                        onUpdate = { update ->
+                            android.util.Log.d("NeuralAgent", "AcceptCall: $update")
+                        },
+                        onComplete = { summary ->
+                            android.util.Log.d("NeuralAgent", "AcceptCall complete: ${summary.take(200)}")
+                        }
+                    )
+                } catch (e: Exception) {
+                    "❌ Failed to answer the call: ${e.message}"
+                }
+            }
+
             // ── SYSTEM CONTROL ────────────────────────────────────
             Intent.SYSTEM_CONTROL -> {
                 stateMachine.setState(AIState.EXECUTING, "SYSTEM ACTION...")
@@ -601,21 +663,96 @@ class NeuralAgent @Inject constructor(
         return 0L
     }
 
+    /**
+     * Handle autonomous call: extract contact name/number + purpose, then start the AI call.
+     */
+    private suspend fun handleAutonomousCall(input: String): String {
+        // Try to extract a phone number first (e.g. +919405580347)
+        val phoneRegex = Regex("""(\+?\d[\d\s\-]{6,14}\d)""")
+        val phoneMatch = phoneRegex.find(input)
+
+        // Extract the purpose — everything after "and" / "to" following the contact/number
+        val purposeRegex = Regex("""\b(and\s+tell|and\s+ask|and\s+say|and\s+inform|to\s+tell|to\s+ask|to\s+discuss|to\s+say|about)\b(.+)""")
+        val purposeMatch = purposeRegex.find(input)
+        val purpose = purposeMatch?.groupValues?.getOrNull(2)?.trim()
+            ?: "General conversation on behalf of the user"
+
+        if (phoneMatch != null) {
+            // Direct phone number provided
+            val phoneNumber = phoneMatch.value.replace(Regex("[\\s\\-]"), "")
+            stateMachine.setState(AIState.EXECUTING, "CALLING $phoneNumber...")
+
+            return autonomousCallSkill.startAutonomousCall(
+                name = phoneNumber,
+                purpose = purpose,
+                onUpdate = { update ->
+                    android.util.Log.d("NeuralAgent", "AutoCall: $update")
+                },
+                onComplete = { summary ->
+                    android.util.Log.d("NeuralAgent", "AutoCall complete: ${summary.take(200)}")
+                }
+            )
+        }
+
+        // No phone number found — try to extract a contact name
+        val cleaned = input
+            .replace(Regex("\\b(call|ring|dial|phone)\\b"), " ")
+            .replace(Regex("\\b(on\\s*(my|your|his|her|their)?\\s*behalf|on\\s*behalf\\s*of\\s*\\w+)\\b"), " ")
+            .replace(Regex("\\b(speak\\s*for\\s*me|talk\\s*(to|for|on)\\s*(me|him|her|them)|represent\\s*me|as\\s*me)\\b"), " ")
+            .replace(Regex("\\b(and\\s+tell|and\\s+ask|and\\s+say|and\\s+inform|to\\s+tell|to\\s+ask|to\\s+discuss|about)\\b.*"), " ")
+            .replace(Regex("\\b(and|then|also|please|can\\s*you|could\\s*you|i\\s*want\\s*you\\s*to|that\\s*you\\s*are|calling)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+        val contactName = cleaned.ifBlank { null }
+
+        if (contactName.isNullOrBlank()) {
+            return "❌ I couldn't determine who to call. Please say something like: \"Call John and talk on my behalf about the meeting.\""
+        }
+
+        stateMachine.setState(AIState.EXECUTING, "CALLING $contactName...")
+
+        return autonomousCallSkill.startAutonomousCall(
+            name = contactName,
+            purpose = purpose,
+            onUpdate = { update ->
+                android.util.Log.d("NeuralAgent", "AutoCall: $update")
+            },
+            onComplete = { summary ->
+                android.util.Log.d("NeuralAgent", "AutoCall complete: ${summary.take(200)}")
+            }
+        )
+    }
+
     private suspend fun handleSystemControl(input: String): String {
         return when {
             input.contains("location") || input.contains("where am i") || input.contains("gps") -> {
                 locationSkill.getLocationString()
             }
             input.contains("call") -> {
-                val target = input.replace("call", "").trim()
-                val contacts = phoneSkill.readContacts(target)
-                if (contacts.isNotEmpty()) {
-                    val contact = contacts.first()
-                    phoneSkill.makeCall(contact.phoneNumber)
-                    "Calling ${contact.name}."
+                // Extract just the phone number or contact name (stop at "and", "to", etc.)
+                val phoneRegex = Regex("""(\+?\d[\d\s\-]{6,14}\d)""")
+                val phoneMatch = phoneRegex.find(input)
+
+                if (phoneMatch != null) {
+                    val number = phoneMatch.value.replace(Regex("[\\s\\-]"), "")
+                    phoneSkill.makeCall(number)
+                    "Calling $number."
                 } else {
-                    phoneSkill.makeCall(target)
-                    "Calling $target."
+                    // Extract contact name: text after "call" but before "and"/"to"/"about"
+                    val target = input
+                        .replace(Regex(".*\\bcall\\b\\s*"), "")
+                        .replace(Regex("\\s*(and|to|about|on|for)\\b.*"), "")
+                        .trim()
+                    val contacts = phoneSkill.readContacts(target)
+                    if (contacts.isNotEmpty()) {
+                        val contact = contacts.first()
+                        phoneSkill.makeCall(contact.phoneNumber)
+                        "Calling ${contact.name}."
+                    } else {
+                        phoneSkill.makeCall(target)
+                        "Calling $target."
+                    }
                 }
             }
             input.contains("send") && (input.contains("sms") || input.contains("message") || input.contains("text")) -> {

@@ -371,6 +371,10 @@ class VoiceManager:
                         command = await self.listen(timeout=8.0)
                         if command and self._on_input_callback:
                             await self._on_input_callback(command)
+                    elif text is None:
+                        # If wake word engine returned None (e.g. error or not available),
+                        # sleep to prevent an infinite tight loop spamming the logs.
+                        await asyncio.sleep(5)
                 else:
                     # If no wake word engine, just sleep to prevent hogging CPU
                     await asyncio.sleep(1)

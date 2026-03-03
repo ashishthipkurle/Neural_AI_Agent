@@ -40,7 +40,13 @@ enum class Intent {
     READ_NOTIFICATIONS,
     SENSOR_DATA,
     // Share
-    SHARE
+    SHARE,
+    // Autonomous calling
+    AUTONOMOUS_CALL,
+    // Auto-answer toggle
+    AUTO_ANSWER_TOGGLE,
+    // Accept/answer a ringing call
+    ACCEPT_CALL
 }
 
 @Singleton
@@ -48,6 +54,12 @@ class IntentParser @Inject constructor() {
 
     fun parse(input: String): Intent {
         val lower = input.lowercase().trim()
+
+        // Ultra-fast exact match via the Command Registry (1500+ commands)
+        val exactMatch = AndroidCommandRegistry.COMMANDS[lower]
+        if (exactMatch != null) {
+            return exactMatch
+        }
 
         return when {
             // ── Navigation shortcuts (highest priority) ──────────────
@@ -102,6 +114,21 @@ class IntentParser @Inject constructor() {
             lower.matches(Regex(".*\\b(analyze|look\\s*at|what\\s*do\\s*you\\s*see)\\b.*")) && lower.contains("image") -> Intent.VISION_ANALYZE
             lower.matches(Regex(".*\\b(price\\s*of|buy|sell|trading)\\b.*")) -> Intent.TRADING
             lower.matches(Regex(".*\\b(remember|what\\s*did\\s*i)\\b.*")) -> Intent.MEMORY_RECALL
+
+            // ── Autonomous Call (must be ABOVE generic call) ─────────
+            lower.matches(Regex(".*\\b(call|ring|dial|phone)\\b.*\\b(on\\s*(my|your|his|her|their)?\\s*behalf|on\\s*behalf\\s*of|speak\\s*for\\s*me|talk\\s*(to|for|on)\\s*(me|my\\s*behalf|him|her|them)|represent\\s*me|as\\s*me|for\\s*me\\s*and\\s*tell|and\\s+tell|and\\s+ask|and\\s+say|and\\s+inform|and\\s+talk)\\b.*")) -> Intent.AUTONOMOUS_CALL
+            lower.matches(Regex(".*\\b(on\\s*(my|his|her)?\\s*behalf|on\\s*behalf\\s*of|speak\\s*for\\s*me|talk\\s*on\\s*my\\s*behalf)\\b.*\\b(call|ring|dial|phone)\\b.*")) -> Intent.AUTONOMOUS_CALL
+
+            // ── Accept/Answer a ringing call (MUST be above generic call) ──
+            lower.matches(Regex(".*\\b(accept|answer|pick\\s*up|attend|receive)\\b.*\\b(the|this|that|incoming)?\\s*(call|phone)\\b.*")) -> Intent.ACCEPT_CALL
+            lower.matches(Regex(".*\\b(pick|pick\\s*up)\\b.*\\b(the)?\\s*(call|phone)\\b.*")) -> Intent.ACCEPT_CALL
+
+            // ── Auto-Answer Toggle ────────────────────────────────
+            lower.matches(Regex(".*\\b(answer|pick\\s*up|attend|receive)\\b.*\\b(my|all|incoming|the)?\\s*(calls?|phone)\\b.*\\b(for\\s*me|on\\s*my\\s*behalf|automatically)\\b.*")) -> Intent.AUTO_ANSWER_TOGGLE
+            lower.matches(Regex(".*\\b(auto|automatic)\\s*(answer|pick\\s*up|attend)\\b.*")) -> Intent.AUTO_ANSWER_TOGGLE
+            lower.matches(Regex(".*\\b(stop|disable|turn\\s*off|don'?t)\\b.*\\b(answer|pick|auto.?answer)\\b.*\\b(calls?|phone)?\\b.*")) -> Intent.AUTO_ANSWER_TOGGLE
+            lower.matches(Regex(".*\\b(enable|start|turn\\s*on)\\b.*\\b(auto.?answer|call\\s*answer)\\b.*")) -> Intent.AUTO_ANSWER_TOGGLE
+
             lower.matches(Regex(".*\\b(call|calling)\\b.*")) -> Intent.SYSTEM_CONTROL
             lower.matches(Regex(".*\\b(location|where\\s*am\\s*i|gps)\\b.*")) -> Intent.SYSTEM_CONTROL
             lower.matches(Regex(".*\\b(notify|notification)\\b.*")) -> Intent.SYSTEM_CONTROL
