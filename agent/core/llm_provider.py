@@ -37,8 +37,9 @@ def get_llm(config: Dict[str, Any], *, temperature: float = 0.1) -> ChatOllama:
         model=model,
         base_url=base_url,
         temperature=temperature,
-        timeout=120,   # 2 min per-chunk timeout
-        num_predict=2048,  # cap output tokens — prevents 9+ min hangs on long generations
+        timeout=300,   # 5 min per-chunk timeout for large code generation
+        num_predict=16384,  # enough for full file writes and multi-function responses
+        num_ctx=32768,  # 32K context window for system prompt + code + tool results
     )
 
 

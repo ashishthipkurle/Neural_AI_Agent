@@ -20,7 +20,7 @@ import sys
 import os
 import uuid
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 # Add project root to path (parent of agent/) for 'agent.' imports to work
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -415,14 +415,15 @@ class NeuralAgent:
             await self._skill_router.start()
 
     
-    async def process_input(self, user_input: str, image_data: Optional[str] = None, source: str = "local") -> str:
+    async def process_input(
+        self, 
+        text: str, 
+        source: str = "local", 
+        image_data: str = None,
+        proposal_mode: bool = False
+    ) -> Any:
         """
-        Process user input and return response with full sync.
-        
-        Flow:
-        1. Parse intent
-        2. Execute tools with task_ids
-        3. Broadcast assistant response and speak
+        Process user input and coordinate execution.
         """
         if not self._initialized:
             return "Agent not initialized. Please wait..."
@@ -433,7 +434,7 @@ class NeuralAgent:
         
         # Add to short-term memory
         if self._short_term_memory:
-            msg_content = user_input
+            msg_content = text
             if image_data:
                 msg_content += " [Image Attached]"
             self._short_term_memory.add_message("user", msg_content)
@@ -454,7 +455,7 @@ class NeuralAgent:
             self._history_manager.add_message(
                 conv_id,
                 "user",
-                user_input + (" [Image Attached]" if image_data else "")
+                text + (" [Image Attached]" if image_data else "")
             )
         
         # State transitions
@@ -483,7 +484,7 @@ class NeuralAgent:
                 logger.info(f"Saved attached image to: {image_path}")
                 
                 # Append path to input so LLM can see it
-                user_input += f" [Image Path: {image_path}]"
+                text += f" [Image Path: {image_path}]"
                 
             except Exception as e:
                 logger.error(f"Failed to save image attachment: {e}")
@@ -503,15 +504,15 @@ class NeuralAgent:
             # ---------------------------------------------------------
             # FAST PATH: Regex Command Router (Bypass LLM)
             # ---------------------------------------------------------
-            if self.fast_command_router and self.fast_command_router.can_handle(user_input):
-                logger.info(f"Fast routing command: {user_input}")
+            if self.fast_command_router and self.fast_command_router.can_handle(text):
+                logger.info(f"Fast routing command: {text}")
                 
                 # Notify UI processing if local
                 if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Executing fast command...", task_id)
                 
                 # Execute
-                result = await self.fast_command_router.execute(user_input)
+                result = await self.fast_command_router.execute(text)
                 response_text = result.get("response", "Done.")
                 
                 # Broadcast Assistant Response if local
@@ -538,7 +539,7 @@ class NeuralAgent:
             # VOICE CALL BYPASS: Route "call X" commands directly to voice_call skill
             # instead of letting LangGraph write scripts from scratch.
             # ---------------------------------------------------------
-            call_params = self._parse_call_command(user_input)
+            call_params = self._parse_call_command(text)
             if call_params:
                 logger.info(f"Voice call bypass: routing to voice_call skill: {call_params}")
                 if source == "local" and self.sync_broadcast:
@@ -564,12 +565,12 @@ class NeuralAgent:
             # and go through MissionControlSkill → PlanningSkill → BrowserSkill
             # e.g. "go to chatgpt and chat about electric cars for 1 min"
             # ---------------------------------------------------------
-            if self._should_route_to_mission(user_input):
-                logger.info(f"Mission bypass: routing to mission controller: {user_input[:80]}")
+            if self._should_route_to_mission(text):
+                logger.info(f"Mission bypass: routing to mission controller: {text[:80]}")
                 if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Starting mission...", task_id)
 
-                response = await self._execute_mission(user_input, source, task_id)
+                response = await self._execute_mission(text, source, task_id)
 
                 # Memory
                 if self._short_term_memory:
@@ -590,8 +591,8 @@ class NeuralAgent:
             # e.g. "who is the president of india", "what is python",
             #       "hello", "how are you"
             # ---------------------------------------------------------
-            if self._is_simple_question(user_input):
-                logger.info(f"Simple question bypass: direct LLM chat: {user_input[:80]}")
+            if self._is_simple_question(text):
+                logger.info(f"Simple question bypass: direct LLM chat: {text[:80]}")
                 if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Answering...", task_id)
 
@@ -600,7 +601,7 @@ class NeuralAgent:
                 try:
                     from agent.tools.web_search import WebSearchTool
                     quick_search = WebSearchTool()
-                    raw = quick_search.search(user_input, max_results=2)
+                    raw = quick_search.search(text, max_results=2)
                     if raw and "error" not in raw.lower() and "no results" not in raw.lower():
                         search_context = f"\n\n[REFERENCE DATA - Use this to answer accurately]\n{raw}\n[END REFERENCE DATA]\n"
                         logger.info(f"Quick search returned context ({len(raw)} chars)")
@@ -608,9 +609,9 @@ class NeuralAgent:
                     logger.warning(f"Quick search failed (answering from memory): {e}")
 
                 # Build an enhanced prompt with search context
-                enhanced_input = user_input
+                enhanced_input = text
                 if search_context:
-                    enhanced_input = f"{search_context}\nUser question: {user_input}\n\nAnswer the user's question directly and concisely based on the reference data above. Give a short, factual answer."
+                    enhanced_input = f"{search_context}\nUser question: {text}\n\nAnswer the user's question directly and concisely based on the reference data above. Give a short, factual answer."
 
                 response = await self._chat_with_llm(enhanced_input)
 
@@ -639,25 +640,26 @@ class NeuralAgent:
             # LANGGRAPH RUNTIME (Primary: supervisor multi-agent graph)
             # ---------------------------------------------------------
             if self._langgraph_runtime:
-                logger.info(f"LangGraph processing: {user_input[:80]}")
+                logger.info(f"LangGraph processing: {text[:80]}")
                 if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Processing via LangGraph...", task_id)
                 
                 # Use a stable per-source thread_id so Telegram chats don't share context with local.
                 thread_id = self.active_conversation_id if source == "local" else (source or "telegram")
-
-                response = await self._langgraph_runtime.process(
-                    user_input=user_input,
-                    image_data=image_data,
-                    source=source,
-                    thread_id=thread_id,
-                )
-                
+                try:
+                    # Use the new unified LangGraph runtime
+                    final_response = await self._langgraph_runtime.process(
+                        user_input=text,
+                        image_data=image_data,
+                        source=source,
+                        thread_id=self.active_conversation_id,
+                        proposal_mode=proposal_mode
+                    )
+                    return final_response
+                except Exception as e:
+                    # If LangGraph fails, log and fall back to legacy pipeline if available
+                    logger.error(f"LangGraph execution failed: {e}")
                 # Broadcast + Speak
-                if source == "local" and self.sync_broadcast:
-                    self.sync_broadcast("assistant", "assistant", response, task_id)
-                if source == "local" and self._voice_manager:
-                    await self._voice_manager.speak(response, suppress_sync=True)
                 if source == "local" and self.sync_broadcast:
                     self.sync_broadcast("status", "system", "Done", task_id)
                 

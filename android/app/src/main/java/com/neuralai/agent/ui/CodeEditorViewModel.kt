@@ -42,8 +42,7 @@ data class OpenTab(
     var isEdited: Boolean = false
 )
 
-// Matches PC app CopilotMode: suggest | explain | refactor
-enum class CopilotMode { SUGGEST, EXPLAIN, REFACTOR }
+
 
 @HiltViewModel
 class CodeEditorViewModel @Inject constructor(
@@ -64,11 +63,11 @@ class CodeEditorViewModel @Inject constructor(
     var fileContent = mutableStateOf("// Select a file or open a project folder")
     var isEdited = mutableStateOf(false)
     
-    var copilotMode = mutableStateOf(CopilotMode.SUGGEST)
+
     var isAgentLoading = mutableStateOf(false)
 
     val agentMessages = mutableStateListOf(
-        AgentMsg("agent", "Hello! I can help with:\n• Generate new code\n• Explain code\n• Debug & refactor\n\nTry: \"create a calculator\"")
+        AgentMsg("agent", "Hello! I can help with:\n• Generate, modify & refactor code\n• Explain code & answer questions\n• Debug & fix issues\n\nJust describe what you need!")
     )
 
     val terminalLines = mutableStateListOf("> Neural Agent CLI ready.", "> ")
@@ -422,9 +421,8 @@ class CodeEditorViewModel @Inject constructor(
                 val treeContext = buildTreeContext(fileTree.value, 0)
                 val fileTreeStr = if (treeContext.isNotEmpty()) treeContext else "(No files loaded)"
 
-                // Mode-specific prompts matching PC behavior
-                val systemPrompt = when (copilotMode.value) {
-                    CopilotMode.SUGGEST -> """You are an expert AI coding assistant embedded in an IDE.
+                // Single intelligent prompt — agent decides what to do
+                val systemPrompt = """You are an expert AI coding assistant embedded in an IDE.
 
 PROJECT FILES:
 $fileTreeStr
@@ -433,17 +431,11 @@ $codeContext
 INSTRUCTIONS:
 - If the user asks to "scan", "list", "show", "describe", or "tell me about" the project, summarize the file tree above. Do NOT generate code.
 - If the user asks to "explain" code, explain it clearly without generating new code.
+- If the user asks to "refactor" or "improve" code, return the complete refactored file content in a code block.
 - If the user asks to "generate", "create", "write", or "build" something, provide complete, runnable code in a code block.
 - For each code block, specify the language after the opening triple backticks (e.g. ```python).
+- For multiple files, use separate code blocks with a filename comment on the first line like: // filename: path/to/file.ext
 - Be concise and helpful. Match your response to the user's intent."""
-
-                    CopilotMode.EXPLAIN -> "You are a code explanation assistant. Explain code clearly and concisely. Use bullet points for key concepts."
-                    
-                    CopilotMode.REFACTOR -> """You are a code refactoring assistant inside an IDE.
-If a file is open, return the complete refactored file content in a code block.
-If no file is open and the user asks to create something, generate the code in code blocks with language tags.
-For multiple files, use separate code blocks with a filename comment on the first line like: // filename: path/to/file.ext"""
-                }
 
                 val response = ollamaClient.chat(
                     model = "qwen2.5:0.5b",
@@ -456,7 +448,6 @@ For multiple files, use separate code blocks with a filename comment on the firs
                 android.util.Log.d("CodeEditor", "Found ${allCodeBlocks.size} fenced code blocks in response")
 
                 // FALLBACK: If no fenced code blocks found, check if the response is raw code
-                // Small local models (qwen2.5:0.5b) often return code without markdown fences
                 if (allCodeBlocks.isEmpty() && looksLikeCode(response)) {
                     val lang = guessLanguageFromCode(response, text)
                     allCodeBlocks = listOf(CodeBlock(lang, response.trim()))
@@ -468,14 +459,8 @@ For multiple files, use separate code blocks with a filename comment on the firs
                     agentMessages.add(AgentMsg("agent", response))
                 }
 
-                when (copilotMode.value) {
-                    CopilotMode.SUGGEST -> handleSuggestMode(allCodeBlocks, userMessage, text)
-                    CopilotMode.REFACTOR -> handleRefactorMode(allCodeBlocks, userMessage, text)
-                    CopilotMode.EXPLAIN -> {
-                        if (allCodeBlocks.isEmpty()) { /* already added above */ }
-                        else agentMessages.add(AgentMsg("agent", response))
-                    }
-                }
+                // Single handler for all code blocks
+                handleSuggestMode(allCodeBlocks, userMessage, text)
 
                 saveProjectHistory()
 
@@ -492,12 +477,14 @@ For multiple files, use separate code blocks with a filename comment on the firs
     private suspend fun handleSuggestMode(codeBlocks: List<CodeBlock>, userMessage: String, originalText: String) {
         if (codeBlocks.isEmpty()) return
 
-        // Modification detection keywords (matches PC modificationKeywords)
+        // Modification detection keywords — agent auto-detects code changes
         val modKeywords = listOf(
-            "modify", "refine", "update", "change", "fix", "improve",
+            "modify", "refine", "update", "change", "fix", "improve", "refactor",
+            "redesign", "restyle", "rework", "redo", "rewrite", "optimize", "simplify",
             "add ", "add a ", "add the ", "add to", "insert",
             "in this", "to this", "this file", "this code",
-            "edit", "replace", "remove", "delete from"
+            "edit", "replace", "remove", "delete from",
+            "make it", "make the", "convert", "transform", "clean up"
         )
         val isModification = modKeywords.any { userMessage.contains(it) }
         val hasActiveFile = selectedFileUri.value != null && selectedFileName.value.isNotBlank()
@@ -572,39 +559,7 @@ For multiple files, use separate code blocks with a filename comment on the firs
         }
     }
 
-    /** Handles Refactor mode — if file open, update it; if not, create new files */
-    private suspend fun handleRefactorMode(codeBlocks: List<CodeBlock>, userMessage: String, originalText: String) {
-        if (codeBlocks.isEmpty()) return
 
-        val hasActiveFile = selectedFileUri.value != null && selectedFileName.value.isNotBlank()
-
-        if (hasActiveFile && codeBlocks.size == 1) {
-            // Refactor the currently open file
-            val code = codeBlocks[0].content
-            fileContent.value = code
-            selectedFileUri.value?.let { uri ->
-                if (uri.scheme == "file") {
-                    File(uri.path!!).writeText(code)
-                    isEdited.value = false
-                    agentMessages.add(AgentMsg("agent", "✅ Refactored and saved: ${selectedFileName.value}"))
-                } else {
-                    try {
-                        application.contentResolver.openOutputStream(uri, "wt")?.use { os ->
-                            os.write(code.toByteArray())
-                        }
-                        isEdited.value = false
-                        agentMessages.add(AgentMsg("agent", "✅ Refactored and saved: ${selectedFileName.value}"))
-                    } catch (e: Exception) {
-                        isEdited.value = true
-                        agentMessages.add(AgentMsg("agent", "📝 Refactored code applied. Save manually."))
-                    }
-                }
-            }
-        } else {
-            // No active file or multiple blocks — create new files (same as suggest)
-            handleSuggestMode(codeBlocks, userMessage, originalText)
-        }
-    }
 
     // ========== CODE BLOCK EXTRACTION (matches PC codeBlockRegex) ==========
 

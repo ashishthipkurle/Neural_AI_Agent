@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.neuralai.agent.ui.CodeEditorViewModel
-import com.neuralai.agent.ui.CopilotMode
 import com.neuralai.agent.ui.FileItem
 
 // ===== PC-matching color palette (obsidian-pro.css) =====
@@ -64,7 +63,7 @@ fun CodeEditorScreen(
     val selectedFileName by viewModel.selectedFileName
     val fileContent by viewModel.fileContent
     val isEdited by viewModel.isEdited
-    val copilotMode by viewModel.copilotMode
+
     val isAgentLoading by viewModel.isAgentLoading
 
     var showExplorer by remember { mutableStateOf(true) }
@@ -330,40 +329,7 @@ fun CodeEditorScreen(
                             Text("CODE AGENT", color = ObsPurple, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 11.sp, letterSpacing = 1.sp)
                         }
 
-                        // ===== Copilot Mode Selector (exact PC replica) =====
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF0A0F1A))
-                                .padding(2.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            CopilotModeButton(
-                                label = "Suggest",
-                                isActive = copilotMode == CopilotMode.SUGGEST,
-                                activeColor = ObsGreen,
-                                activeBg = ObsGreenBg,
-                                onClick = { viewModel.copilotMode.value = CopilotMode.SUGGEST }
-                            )
-                            Box(modifier = Modifier.width(1.dp).height(14.dp).background(Color(0xFF333333)))
-                            CopilotModeButton(
-                                label = "Explain",
-                                isActive = copilotMode == CopilotMode.EXPLAIN,
-                                activeColor = ObsCyan,
-                                activeBg = ObsCyanBg,
-                                onClick = { viewModel.copilotMode.value = CopilotMode.EXPLAIN }
-                            )
-                            Box(modifier = Modifier.width(1.dp).height(14.dp).background(Color(0xFF333333)))
-                            CopilotModeButton(
-                                label = "Refactor",
-                                isActive = copilotMode == CopilotMode.REFACTOR,
-                                activeColor = ObsRed,
-                                activeBg = ObsRedBg,
-                                onClick = { viewModel.copilotMode.value = CopilotMode.REFACTOR }
-                            )
-                        }
+
 
                         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(ObsBorder))
 
@@ -426,12 +392,7 @@ fun CodeEditorScreen(
                                     .padding(horizontal = 8.dp, vertical = 8.dp),
                                 decorationBox = { inner ->
                                     if (agentInput.isEmpty()) {
-                                        val hint = when (copilotMode) {
-                                            CopilotMode.SUGGEST -> "Describe what to generate..."
-                                            CopilotMode.EXPLAIN -> "Ask about this code..."
-                                            CopilotMode.REFACTOR -> "Describe how to refactor..."
-                                        }
-                                        Text(hint, color = ObsDimText.copy(alpha = 0.4f), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                                        Text("Describe what you want to build...", color = ObsDimText.copy(alpha = 0.4f), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                                     }
                                     inner()
                                 }
@@ -495,31 +456,7 @@ fun CodeEditorScreen(
     }
 }
 
-// ===== Copilot Mode Button (exact PC replica) =====
-@Composable
-private fun CopilotModeButton(
-    label: String,
-    isActive: Boolean,
-    activeColor: Color,
-    activeBg: Color,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(if (isActive) activeBg else Color.Transparent)
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-    ) {
-        Text(
-            label,
-            color = if (isActive) activeColor else ObsDimText,
-            fontWeight = if (isActive) FontWeight.Medium else FontWeight.Normal,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp
-        )
-    }
-}
+
 
 // ===== File tree helpers =====
 private fun flattenTree(items: List<FileItem>): List<FileItem> {

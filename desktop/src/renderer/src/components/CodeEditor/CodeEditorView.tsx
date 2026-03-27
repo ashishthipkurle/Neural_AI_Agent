@@ -3,7 +3,6 @@ import { X, FolderOpen, ChevronRight, ChevronDown, FileText, Folder, Send, Spark
 import Editor from '@monaco-editor/react';
 import TerminalPanel from './TerminalPanel';
 import { DiffPreview } from './DiffPreview';
-import { CopilotModeSelector, CopilotMode } from './CopilotModeSelector';
 import { registerInlineCompletionProvider } from './InlineCompletionProvider';
 import * as monaco from 'monaco-editor';
 
@@ -91,8 +90,6 @@ export default function CodeEditorView({ onClose, initialProjectPath = null }: C
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
 
-    // Copilot State
-    const [copilotMode, setCopilotMode] = useState<CopilotMode>('suggest');
     const [diffPreviewOpen, setDiffPreviewOpen] = useState(false);
     const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
@@ -1045,54 +1042,267 @@ User request: ${requestText}
             // (Keeping it but removing auto-save if inside createNewFile)
         }
 
-        // Copilot Mode Logic
-        if (copilotMode === 'refactor') {
-            try {
-                const current = openFiles.find(f => f.path === activeFile);
-                if (!current) {
-                    setAgentMessages(prev => [...prev, { role: 'agent', text: 'Please open a file to refactor.' }]);
+        // Intelligent Intent Classification & Routing
+        try {
+            const current = openFiles.find(f => f.path === activeFile);
+
+            // 1. Ask the LLM to classify the intent
+            const controller = new AbortController();
+            abortControllerRef.current = controller;
+
+            const intentResponse = await fetch('http://localhost:8000/api/code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                body: JSON.stringify({
+                    message: `Analyze this user request: "${originalMessage}"
+                    
+Reply with exactly ONE word from this list:
+- "MODIFY" (if they are asking to change, refactor, rewrite, add to, or delete from existing code/files)
+- "CREATE" (if they are asking to build, generate, or write a NEW file or project from scratch)
+- "EXPLAIN" (if they are asking how something works, or to explain code)
+- "CHAT" (if they are just saying hi, asking a general question, or anything else)`,
+                    ...(selectedLlmModel !== 'auto' ? { model_name: selectedLlmModel } : {})
+                })
+            });
+
+            if (!intentResponse.ok) throw new Error('Failed to classify intent');
+
+            const intentData = await intentResponse.json();
+            const intentText = (intentData?.response || '').trim().toUpperCase();
+
+            const intent = intentText.includes('MODIFY') ? 'MODIFY' :
+                intentText.includes('CREATE') ? 'CREATE' :
+                    intentText.includes('EXPLAIN') ? 'EXPLAIN' : 'CHAT';
+
+            console.log(`🧠 Intent detected: ${intent}`);
+
+            // 2. Route based on intent
+            if (intent === 'MODIFY' || intent === 'CREATE') {
+                setAgentMessages(prev => [...prev, { role: 'agent', text: '🔍 Scanning project and creating implementation plan...' }]);
+
+                const planController = new AbortController();
+                abortControllerRef.current = planController;
+
+                const proposeResponse = await fetch('http://localhost:8000/api/agent/propose_edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: planController.signal,
+                    body: JSON.stringify({
+                        instruction: originalMessage,
+                        active_file: current?.path
+                    })
+                });
+
+                if (!proposeResponse.ok) {
+                    throw new Error(await proposeResponse.text() || 'Failed to generate patch');
+                }
+
+                const proposeData = await proposeResponse.json();
+
+                // ── Plan Approval Flow ──
+                if (proposeData.intent === 'plan_awaiting_approval') {
+                    const planText = proposeData.explanation || 'No plan details available.';
+                    const threadId = proposeData.proposal_id || '';
+
+                    setAgentMessages(prev => [...prev, {
+                        role: 'agent',
+                        text: `📋 **Implementation Plan**\n\n${planText}\n\n---\n*Click **Approve** to execute this plan, or **Reject** to cancel.*`
+                    }]);
+
+                    // Show approve/reject buttons by setting a pending plan state
+                    setIsLoading(false);
+
+                    // Create approval handler that will be called when user clicks approve
+                    const handleApproval = async (approved: boolean) => {
+                        setIsLoading(true);
+                        setAgentMessages(prev => {
+                            const updatedMessages = [...prev];
+                            // Find the latest plan message and remove the action prompt
+                            for (let i = updatedMessages.length - 1; i >= 0; i--) {
+                                if (updatedMessages[i].role === 'agent' && updatedMessages[i].text.includes('Implementation Plan')) {
+                                    updatedMessages[i] = { 
+                                        ...updatedMessages[i], 
+                                        text: updatedMessages[i].text.replace('*Click **Approve** to execute this plan, or **Reject** to cancel.*', `*Plan ${approved ? 'Accepted' : 'Declined'}*`)
+                                    };
+                                    break;
+                                }
+                            }
+                            updatedMessages.push({
+                                role: 'agent',
+                                text: approved ? '✅ Plan approved! Implementing changes...' : '❌ Plan rejected.'
+                            });
+                            return updatedMessages;
+                        });
+
+                        if (!approved) {
+                            setIsLoading(false);
+                            return;
+                        }
+
+                        try {
+                            const execController = new AbortController();
+                            abortControllerRef.current = execController;
+
+                            const execResponse = await fetch('http://localhost:8000/api/agent/approve_plan', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                signal: execController.signal,
+                                body: JSON.stringify({
+                                    thread_id: threadId,
+                                    approved: true,
+                                    active_file: current?.path
+                                })
+                            });
+
+                            if (!execResponse.ok) {
+                                throw new Error(await execResponse.text() || 'Execution failed');
+                            }
+
+                            const execData = await execResponse.json();
+
+                            if (execData.patches && execData.patches.length > 0) {
+                                // Apply patches same as before
+                                const mappedPatches: PatchEntry[] = [];
+                                const changedLinesMap: Record<string, number[]> = {};
+                                const changed = new Set<string>();
+
+                                for (const p of execData.patches) {
+                                    const filePath = p.file_path;
+                                    let originalContent = '';
+                                    const f = openFiles.find(xf => xf.path === filePath);
+                                    if (f) originalContent = f.content;
+                                    else if (!p.is_new) {
+                                        try {
+                                            originalContent = await readFileContent(filePath);
+                                        } catch (e) { }
+                                    }
+
+                                    const patchedContent = p.new_content || '';
+                                    const lineNums = Array.from({ length: patchedContent.split('\n').length }, (_, i) => i + 1);
+
+                                    mappedPatches.push({
+                                        filePath,
+                                        originalContent,
+                                        patchedContent,
+                                        unifiedDiff: p.diff,
+                                        proposalId: execData.proposal_id || undefined,
+                                        changedLineNumbers: p.is_new ? lineNums : [],
+                                        isNewFile: p.is_new,
+                                    } as PatchEntry);
+
+                                    changedLinesMap[filePath] = lineNums;
+                                    changed.add(filePath);
+
+                                    const name = filePath.split(/[\\/]/).pop() || filePath;
+                                    setOpenFiles(prev => {
+                                        if (prev.some(xf => xf.path === filePath)) {
+                                            return prev.map(xf => xf.path === filePath ? { ...xf, content: patchedContent, modified: true } : xf);
+                                        }
+                                        return [...prev, { path: filePath, name, content: patchedContent, language: getLanguage(name), modified: true }];
+                                    });
+
+                                    insertFileIntoTree(filePath);
+                                }
+
+                                setPendingPatches(mappedPatches);
+                                setChangedFiles(changed);
+                                setAiChangedLinesByFile(changedLinesMap);
+
+                                setAgentMessages(prev => [...prev, {
+                                    role: 'agent',
+                                    text: `✅ Implementation complete! Modified ${execData.patches.length} file(s).\n\n${execData.explanation || ''}`
+                                }]);
+                            } else {
+                                setAgentMessages(prev => [...prev, {
+                                    role: 'agent',
+                                    text: execData.explanation || 'Plan executed but no file changes were made.'
+                                }]);
+                            }
+                        } catch (execErr: any) {
+                            setAgentMessages(prev => [...prev, {
+                                role: 'agent',
+                                text: `❌ Execution failed: ${execErr.message}`
+                            }]);
+                        } finally {
+                            setIsLoading(false);
+                        }
+                    };
+
+                    // Store the handler for the UI buttons
+                    (window as any).__pendingPlanApproval = handleApproval;
+                    return;
+                }
+
+                if (!proposeData.patches || proposeData.patches.length === 0) {
+                    setAgentMessages(prev => [...prev, { role: 'agent', text: proposeData.explanation || 'Done, but no file changes were made.' }]);
                     setIsLoading(false);
                     return;
                 }
 
-                const controller = new AbortController();
-                abortControllerRef.current = controller;
+                const mappedPatches: PatchEntry[] = [];
+                const changedLinesMap: Record<string, number[]> = {};
+                const changed = new Set<string>();
 
-                const plan = await generateImplementationPlan(originalMessage, current.path, current.content, controller.signal);
-                setPendingPlan(plan);
-                setLastRefactorRequest(originalMessage);
-                setEditorStage('waiting_for_plan_approval');
-                setStageMessage('Waiting for plan approval...');
-                setAgentMessages(prev => [...prev, { role: 'agent', text: '::plan_ready::' }]);
-            } catch (e: any) {
-                if (e.name === 'AbortError') {
-                    setAgentMessages(prev => [...prev, { role: 'agent', text: '⏹ Refactor request stopped.' }]);
-                    setEditorStage('idle');
-                } else {
-                    setEditorStage('error');
-                    const hint = (e.message || '').includes('fetch')
-                        ? ' Make sure the backend server is running at localhost:8000.'
-                        : '';
-                    setAgentMessages(prev => [...prev, { role: 'agent', text: `Plan error: ${e.message || e}.${hint}` }]);
+                for (const p of proposeData.patches) {
+                    const filePath = p.file_path;
+                    let originalContent = '';
+                    const f = openFiles.find(xf => xf.path === filePath);
+                    if (f) originalContent = f.content;
+                    else if (!p.is_new) {
+                        try {
+                            originalContent = await readFileContent(filePath);
+                        } catch (e) { }
+                    }
+
+                    const patchedContent = p.new_content || '';
+                    const lineNums = Array.from({ length: patchedContent.split('\n').length }, (_, i) => i + 1);
+
+                    mappedPatches.push({
+                        filePath,
+                        originalContent,
+                        patchedContent,
+                        unifiedDiff: p.diff,
+                        proposalId: proposeData.proposal_id || undefined,
+                        changedLineNumbers: p.is_new ? lineNums : [],
+                        isNewFile: p.is_new,
+                    } as PatchEntry);
+
+                    changedLinesMap[filePath] = lineNums;
+                    changed.add(filePath);
+
+                    const name = filePath.split(/[\\/]/).pop() || filePath;
+                    setOpenFiles(prev => {
+                        if (prev.some(xf => xf.path === filePath)) {
+                            return prev.map(xf => xf.path === filePath ? { ...xf, content: patchedContent, modified: true } : xf);
+                        }
+                        return [...prev, { path: filePath, name, content: patchedContent, language: getLanguage(name), modified: true }];
+                    });
+
+                    insertFileIntoTree(filePath);
                 }
-                setStageMessage('');
-            } finally {
-                abortControllerRef.current = null;
-            }
-            setIsLoading(false);
-            return; // Stop here
-        }
 
-        if (copilotMode === 'explain') {
-            try {
-                const current = openFiles.find(f => f.path === activeFile);
+                setPendingPatches(mappedPatches);
+                setAiChangedLinesByFile(changedLinesMap);
+                setChangedFiles(changed);
+                setLastRefactorRequest(originalMessage);
+
+                if (mappedPatches.length > 0) {
+                    setActiveFile(mappedPatches[0].filePath);
+                }
+
+                setEditorStage('waiting_for_patch_approval');
+                setStageMessage('Review the changes generated by the agent.');
+                setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ I've made changes to ${mappedPatches.length} file(s). Please review and accept/reject them in the editor.` }]);
+
+            } else if (intent === 'EXPLAIN') {
+                // Route to Explain workflow
                 if (!current) {
                     setAgentMessages(prev => [...prev, { role: 'agent', text: 'Please open a file to explain.' }]);
                     setIsLoading(false);
                     return;
                 }
 
-                // Get selected text from editor, or use full file content
                 const editorInstance = editorRef.current;
                 const sel = editorInstance?.getSelection();
                 const editorModel = editorInstance?.getModel();
@@ -1103,12 +1313,7 @@ User request: ${requestText}
 
                 const codeToExplain = selectedText || current.content.slice(0, 6000);
 
-                const controller = new AbortController();
-                abortControllerRef.current = controller;
-
                 let explanation = '';
-
-                // Try dedicated explain endpoint first
                 try {
                     const response = await fetch('http://localhost:8000/api/copilot/explain', {
                         method: 'POST',
@@ -1130,12 +1335,10 @@ User request: ${requestText}
                         const data = await response.json();
                         explanation = data?.explanation || data?.response || '';
                     }
-                } catch (innerErr: any) {
-                    if (innerErr.name === 'AbortError') throw innerErr;
-                    console.warn('Copilot explain endpoint failed, falling back to /api/code:', innerErr.message);
+                } catch (e) {
+                    // Fallback handled below
                 }
 
-                // Fallback: use /api/code (the same endpoint that works for suggest mode)
                 if (!explanation) {
                     const fallbackResponse = await fetch('http://localhost:8000/api/code', {
                         method: 'POST',
@@ -1147,177 +1350,41 @@ User request: ${requestText}
                         })
                     });
                     const fallbackData = await fallbackResponse.json();
-                    explanation = fallbackData?.response || 'Could not generate explanation. Make sure the backend server is running.';
+                    explanation = fallbackData?.response || 'Could not generate explanation.';
                 }
 
                 setAgentMessages(prev => [...prev, { role: 'agent', text: `📖 **Explanation:**\n\n${explanation}` }]);
-            } catch (e: any) {
-                if (e.name === 'AbortError') {
-                    setAgentMessages(prev => [...prev, { role: 'agent', text: '⏹ Explain request stopped.' }]);
-                } else {
-                    setAgentMessages(prev => [...prev, { role: 'agent', text: `Explain error: ${e.message || e}. Make sure the backend is running at localhost:8000.` }]);
-                }
-            } finally {
-                abortControllerRef.current = null;
-            }
-            setIsLoading(false);
-            return;
-        }
 
-        // Default / Suggest Mode -> Fallback to Chat or existing logic but STRICTLY NO AUTO-SAVE
-        // Note: Inline suggestions happen automatically via Monaco provider.
-        // If user chats in "Suggest" mode, we treat it as Q&A or generate code to clipboard/buffer.
-        // All code generation now goes through the LLM for proper context understanding.
+            } else {
+                // Route to Chat workflow
+                const context = current ? `\nOPEN FILE: ${current.name}\n\`\`\`${current.language}\n${current.content.slice(0, 1500)}\n\`\`\`` : '';
 
-        // For other requests, use the LLM
-        try {
-            const currentFile = openFiles.find(f => f.path === activeFile);
-            const context = currentFile ? `\nOPEN FILE: ${currentFile.name}\n\`\`\`${currentFile.language}\n${currentFile.content.slice(0, 1500)}\n\`\`\`` : '';
-
-            // Serialize file tree for context
-            const serializeFileTree = (nodes: FileNode[], depth = 0): string => {
-                return nodes.map(n => {
-                    const indent = '  '.repeat(depth);
-                    if (n.type === 'folder') {
-                        const children = n.children && n.expanded ? serializeFileTree(n.children, depth + 1) : '';
-                        return `${indent}📁 ${n.name}/${children ? '\n' + children : ''}`;
-                    }
-                    return `${indent}📄 ${n.name}`;
-                }).join('\n');
-            };
-            const fileTreeContext = fileTree.length > 0 ? serializeFileTree(fileTree) : '(No files loaded)';
-
-            const controller = new AbortController();
-            abortControllerRef.current = controller;
-
-            // Use coding model endpoint with context-aware prompt
-            const response = await fetch('http://localhost:8000/api/code', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                signal: controller.signal,
-                body: JSON.stringify({
-                    message: `You are an expert AI coding assistant embedded in an IDE.
-
-PROJECT FILES:
-${fileTreeContext}
+                const chatResponse = await fetch('http://localhost:8000/api/code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                        message: `You are an expert AI coding assistant embedded in an IDE. Answer the user's question clearly and concisely. 
+                        
 ${context}
 
-USER REQUEST: ${originalMessage}
+USER REQUEST: ${originalMessage}`,
+                        ...(selectedLlmModel !== 'auto' ? { model_name: selectedLlmModel } : {})
+                    })
+                });
 
-INSTRUCTIONS:
-- If the user asks to "scan", "list", "show", "describe", or "tell me about" the project, summarize the file tree above. Do NOT generate code.
-- If the user asks to "explain" code, explain it clearly without generating new code.
-- If the user asks to "generate", "create", "write", or "build" something, provide complete, runnable code in a code block.
-- Be concise and helpful. Match your response to the user's intent.`
-                    ,
-                    ...(selectedLlmModel !== 'auto' ? { model_name: selectedLlmModel } : {})
-                })
-            });
-
-            console.log('Response status:', response.status);
-            const data = await response.json();
-            console.log('Response data:', data);
-
-            if (data.status === 'error') {
-                setAgentMessages(prev => [...prev, { role: 'agent', text: data.response }]);
-                setIsLoading(false);
-                return;
+                const data = await chatResponse.json();
+                const text = data.response || 'No response received';
+                setAgentMessages(prev => [...prev, { role: 'agent', text }]);
             }
 
-            const text = data.response || 'No response received';
-            setAgentMessages(prev => [...prev, { role: 'agent', text }]);
-
-            // Extract ALL code blocks from response (supports multiple files)
-            const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-            const matches = [...text.matchAll(codeBlockRegex)];
-
-            if (matches.length > 0) {
-                const extMap: Record<string, string> = {
-                    javascript: 'js', typescript: 'ts', python: 'py',
-                    html: 'html', css: 'css', json: 'json', jsx: 'jsx', tsx: 'tsx'
-                };
-
-                // Better detection for modification requests
-                // Detects: "add X", "update", "modify", "change", "fix", "improve", "in this", "to this file", etc.
-                const modificationKeywords = [
-                    'modify', 'refine', 'update', 'change', 'fix', 'improve',
-                    'add ', 'add a ', 'add the ', 'add to', 'insert',
-                    'in this', 'to this', 'this file', 'this code',
-                    'edit', 'replace', 'remove', 'delete from'
-                ];
-
-                const isModificationRequest = modificationKeywords.some(keyword =>
-                    userMessage.includes(keyword)
-                );
-
-                const currentFileInfo = openFiles.find(f => f.path === activeFile);
-
-                // If there's an active file and user is asking to modify it
-                if (currentFileInfo && matches.length === 1 && isModificationRequest) {
-                    // Single code block + modification request = update existing file
-                    const code = matches[0][2].trim();
-                    updateFileContent(currentFileInfo.path, code);
-                    // AUTO-SAVE REMOVED: saveFileToBackend(currentFileInfo.path, code);
-                    setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Updated ${currentFileInfo.name} in buffer (unsaved).` }]);
-                } else if (currentFileInfo && matches.length === 1) {
-                    // Even without explicit modification keywords, if there's an active file
-                    // and a single code block of the same language, assume update
-                    const lang = matches[0][1] || 'text';
-                    const currentLang = currentFileInfo.language;
-                    const code = matches[0][2].trim();
-
-                    // Check if languages match (jsx matches javascript, etc.)
-                    const langMatches = lang === currentLang ||
-                        (lang === 'javascript' && (currentLang === 'javascript' || currentLang === 'jsx')) ||
-                        (lang === 'jsx' && currentLang === 'javascript') ||
-                        (lang === 'typescript' && (currentLang === 'typescript' || currentLang === 'tsx'));
-
-                    if (langMatches) {
-                        updateFileContent(currentFileInfo.path, code);
-                        // AUTO-SAVE REMOVED: saveFileToBackend(currentFileInfo.path, code);
-                        setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Updated ${currentFileInfo.name} in buffer (unsaved).` }]);
-                    } else {
-                        // Different language - create new file
-                        const ext = extMap[lang] || lang;
-                        createNewFile(`generated.${ext}`, code, lang);
-                    }
-                } else {
-                    // Create new file(s) for each code block
-                    let fileCount = 0;
-                    matches.forEach((match, index) => {
-                        const lang = match[1] || 'text';
-                        const code = match[2].trim();
-                        const ext = extMap[lang] || lang;
-
-                        // Generate unique filename based on language
-                        let filename = 'generated';
-                        if (lang === 'html') filename = 'index';
-                        else if (lang === 'css') filename = 'styles';
-                        else if (lang === 'python') filename = 'app';
-                        else if (lang === 'javascript' || lang === 'js' || lang === 'jsx') filename = 'script';
-
-                        // Add index if multiple files of same type
-                        if (matches.filter(m => (m[1] || 'text') === lang).length > 1) {
-                            filename += `_${index + 1}`;
-                        }
-
-                        createNewFile(`${filename}.${ext}`, code, lang);
-                        fileCount++;
-                    });
-
-                    if (fileCount > 1) {
-                        setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Created ${fileCount} files!` }]);
-                    } else if (fileCount === 1) {
-                        setAgentMessages(prev => [...prev, { role: 'agent', text: `✅ Created new file!` }]);
-                    }
-                }
-            }
         } catch (err: any) {
             if (err.name === 'AbortError') {
                 setAgentMessages(prev => [...prev, { role: 'agent', text: '⏹ Request stopped.' }]);
+                setEditorStage('idle');
             } else {
-                console.error('Code generation error:', err);
-                setAgentMessages(prev => [...prev, { role: 'agent', text: `Connection error: ${err.message || 'Unknown error'}. Is the server running?` }]);
+                console.error('Agent error:', err);
+                setAgentMessages(prev => [...prev, { role: 'agent', text: `Error: ${err.message || 'Unknown error'}. Is the server running?` }]);
             }
         } finally {
             abortControllerRef.current = null;
@@ -1492,9 +1559,9 @@ INSTRUCTIONS:
                 }
             }
 
-            // Save new files (no proposal_id) explicitly on Apply
-            const newFiles = pendingPatches.filter(p => p.isNewFile);
-            for (const nf of newFiles) {
+            // Save new files and manual edits (no proposal_id) explicitly on Apply
+            const manualSaveFiles = pendingPatches.filter(p => !p.proposalId);
+            for (const nf of manualSaveFiles) {
                 if (!rootPath) {
                     setAgentMessages(prev => [...prev, { role: 'agent', text: `⚠️ Cannot save ${nf.filePath} to disk: no folder selected.` }]);
                     continue;
@@ -1504,8 +1571,8 @@ INSTRUCTIONS:
 
             // Mark patched files with proposals as clean
             const patchedByProposal = new Set(pendingPatches.filter(p => p.proposalId && ids.includes(p.proposalId)).map(p => p.filePath));
-            const newFilePaths = new Set(newFiles.map(n => n.filePath));
-            setOpenFiles(prev => prev.map(f => (patchedByProposal.has(f.path) || newFilePaths.has(f.path)) ? { ...f, modified: false } : f));
+            const manualSavePaths = new Set(manualSaveFiles.map(n => n.filePath));
+            setOpenFiles(prev => prev.map(f => (patchedByProposal.has(f.path) || manualSavePaths.has(f.path)) ? { ...f, modified: false } : f));
             pendingPatches.forEach(p => {
                 if (p.proposalId && ids.includes(p.proposalId)) editorStateRef.current.recordAppliedPatch(p);
             });
@@ -1551,7 +1618,10 @@ INSTRUCTIONS:
                 }
                 await saveFileToBackend(patch.filePath, patch.patchedContent);
             } else {
-                throw new Error('Patch has no apply method (no proposalId and not a new file)');
+                if (!rootPath) {
+                    throw new Error('Cannot save manually edited file to disk: no folder selected');
+                }
+                await saveFileToBackend(patch.filePath, patch.patchedContent);
             }
 
             // Mark file clean and remove from pending list
@@ -1612,8 +1682,8 @@ INSTRUCTIONS:
             <div key={node.path} className="flex flex-col">
                 <div
                     className={`flex items-center py-1.5 px-4 cursor-pointer transition-all duration-200 border-l-2 ${activeFile === node.path
-                            ? 'text-gray-200 bg-blue-500/10 border-blue-500'
-                            : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border-transparent'
+                        ? 'text-gray-200 bg-blue-500/10 border-blue-500'
+                        : 'text-gray-400 hover:text-gray-200 hover:bg-white/5 border-transparent'
                         }`}
                     style={{ paddingLeft: `${Math.max(1, level + 1) * 12}px` }}
                     onClick={(e) => {
@@ -1733,8 +1803,8 @@ INSTRUCTIONS:
                     <button
                         onClick={() => { setShowSidebar(true); setActiveSidebarTab('explorer'); }}
                         className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all ${showSidebar && activeSidebarTab === 'explorer'
-                                ? 'text-white border-l-2 border-primary bg-white/5'
-                                : 'text-gray-500 hover:text-gray-300 border-l-2 border-transparent'
+                            ? 'text-white border-l-2 border-primary bg-white/5'
+                            : 'text-gray-500 hover:text-gray-300 border-l-2 border-transparent'
                             }`}
                         title="Explorer"
                     >
@@ -1743,8 +1813,8 @@ INSTRUCTIONS:
                     <button
                         onClick={() => { setShowSidebar(true); setActiveSidebarTab('extensions'); }}
                         className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all ${showSidebar && activeSidebarTab === 'extensions'
-                                ? 'text-white border-l-2 border-primary bg-white/5'
-                                : 'text-gray-500 hover:text-gray-300 border-l-2 border-transparent'
+                            ? 'text-white border-l-2 border-primary bg-white/5'
+                            : 'text-gray-500 hover:text-gray-300 border-l-2 border-transparent'
                             }`}
                         title="Extensions"
                     >
@@ -1909,8 +1979,8 @@ INSTRUCTIONS:
                                                             key={p.filePath}
                                                             onClick={() => setActiveFile(p.filePath)}
                                                             className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors ${p.filePath === activeFile
-                                                                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                                                                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+                                                                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                                                                : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
                                                                 }`}
                                                         >
                                                             {p.filePath.split(/[\\/]/).pop()}
@@ -2162,6 +2232,7 @@ INSTRUCTIONS:
                                         </div>
                                     );
                                 }
+                                const isPlanMessage = msg.role === 'agent' && msg.text.includes('Implementation Plan') && msg.text.includes('Approve');
                                 return (
                                     <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
                                         <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border ${msg.role === 'agent' ? 'bg-primary/10 border-primary/20' : 'bg-gray-700/50 border-gray-600'}`}>
@@ -2172,6 +2243,30 @@ INSTRUCTIONS:
                                             <div className={`text-[12px] text-gray-300 leading-relaxed p-3 rounded-lg border shadow-sm ${msg.role === 'agent' ? 'bg-[#121215] border-gray-800/80' : 'bg-[#1e1e24] border-gray-700'}`}>
                                                 <p className="whitespace-pre-wrap">{msg.text}</p>
                                             </div>
+                                            {isPlanMessage && (
+                                                <div className="flex gap-2 mt-2">
+                                                    <button
+                                                        className="px-4 py-1.5 bg-green-600 hover:bg-green-500 text-white text-[11px] font-medium rounded-md transition-all duration-200 flex items-center gap-1.5 shadow-lg shadow-green-500/20"
+                                                        onClick={() => {
+                                                            const handler = (window as any).__pendingPlanApproval;
+                                                            if (handler) handler(true);
+                                                        }}
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">check_circle</span>
+                                                        Approve & Execute
+                                                    </button>
+                                                    <button
+                                                        className="px-4 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-[11px] font-medium rounded-md border border-red-600/30 transition-all duration-200 flex items-center gap-1.5"
+                                                        onClick={() => {
+                                                            const handler = (window as any).__pendingPlanApproval;
+                                                            if (handler) handler(false);
+                                                        }}
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">cancel</span>
+                                                        Reject
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -2203,9 +2298,6 @@ INSTRUCTIONS:
                             )}
                         </div>
                         <div className="p-3 bg-[#070709] border-t border-gray-800/50">
-                            <div className="mb-2">
-                                <CopilotModeSelector mode={copilotMode} onChange={setCopilotMode} />
-                            </div>
                             <div className="relative group">
                                 <textarea className="w-full bg-[#121215] text-gray-200 text-[12px] p-3 pr-10 rounded-lg border border-gray-800/80 focus:border-primary/50 focus:ring-1 focus:ring-primary/20 focus:outline-none resize-none placeholder-gray-600 transition-all shadow-inner" placeholder="Describe what you want to build..." rows={2} value={agentInput} onChange={(e) => setAgentInput(e.target.value)} onKeyDown={(e) => {
                                     if (e.key === 'Enter' && !e.shiftKey) {

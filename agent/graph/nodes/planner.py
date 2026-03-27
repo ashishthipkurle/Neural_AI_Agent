@@ -1,318 +1,223 @@
 """
-Structured Task Graph Planner — §2/§3 of Production Autonomous Agent Spec.
+Planner Node — Scans the project and creates an implementation plan.
 
-Builds a real task DAG: nodes = subgoals, edges = dependencies.
-Each node annotated with required_tools, risk_score, validation_method.
+READ-ONLY: This node only reads files, searches patterns, and generates a plan.
+It does NOT write, edit, or execute any code.
 """
 
 from __future__ import annotations
 
-import json
 import logging
+import os
+import platform
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
 from agent.graph.state import AgentState
 
-logger = logging.getLogger("graph.planner")
+logger = logging.getLogger("graph.nodes.planner")
 
-PLANNER_PROMPT = """\
-You are a Task Graph Planner for an autonomous agent system.
+MAX_SCAN_ROUNDS = 15
 
-Given an objective and structured intent, decompose it into
-an ordered list of subgoals that form a task DAG (directed acyclic graph).
-
-Available agents: planner, researcher, coder, executor, critic
-
-For each subgoal, provide:
-- id: unique string (e.g. "step_1")
-- task: what to do (one clear sentence)
-- agent: which agent should execute this
-- tools: list of tool names needed
-- risk: "low", "medium", "high"
-- validation: how to verify this step is done
-- depends_on: list of subgoal IDs this depends on (empty for first steps)
-
-Respond with ONLY a JSON object:
-{
-  "nodes": [
-    {"id": "step_1", "task": "...", "agent": "researcher", "tools": ["research_tool"], "risk": "low", "validation": "...", "depends_on": [], "status": "pending"},
-    {"id": "step_2", "task": "...", "agent": "coder", "tools": ["coding_tool"], "risk": "medium", "validation": "...", "depends_on": ["step_1"], "status": "pending"}
-  ],
-  "edges": [["step_1", "step_2"]]
-}
+PLANNER_SYSTEM_PROMPT = """You are a senior software architect. Your job is to analyze a codebase and create a detailed implementation plan.
 
 RULES:
-1. NO circular dependencies.
-2. Every step must be actionable by ONE agent.
-3. Last step should always be verification/review by critic.
-4. Maximum 8 steps.
-5. No markdown wrapper. Only JSON.
+- You are in READ-ONLY mode. You can ONLY read, search, and analyze files.
+- You CANNOT create, write, edit, or delete any files.
+- You CANNOT run commands that modify the system.
+- You CAN use: bash (read-only commands like ls, find, cat, head, git status), glob, grep, read, ls
+- You CANNOT use: write, edit, multi_edit, bash (with write/modify commands)
+
+YOUR PROCESS:
+1. First, understand what the user wants to accomplish
+2. Scan the project structure (use ls and glob to map the codebase)
+3. Read the key files that will need to be modified
+4. Identify patterns, frameworks, and conventions used
+5. Create a step-by-step implementation plan
+
+YOUR PLAN MUST INCLUDE:
+- **Summary**: What the task accomplishes (1-2 sentences)
+- **Files to Modify**: List each file with what changes are needed
+- **Files to Create**: Any new files needed (with purpose)
+- **Files to Delete**: Any files to remove (if applicable)
+- **Steps**: Numbered implementation steps in order of execution
+- **Verification**: How to verify the changes work
+
+FORMAT YOUR PLAN as clear markdown. Be specific — include file paths, function names, and what exactly changes.
+
+When you are done scanning and have your plan ready, call the exit_plan_mode tool with your complete plan.
+
+<env>
+Working directory: {cwd}
+Platform: {platform}
+Date: {date}
+</env>
+
+{directory_tree}
 """
 
 
+def _build_directory_tree(root: str, max_depth: int = 3, max_entries: int = 80) -> str:
+    """Build a compact directory tree string for context."""
+    lines = []
+    count = 0
+    skip_dirs = {
+        '.git', 'node_modules', '__pycache__', '.next', '.venv', 'venv',
+        'dist', 'build', '.cache', '.mypy_cache', '.pytest_cache',
+        'egg-info', '.egg-info', '.tox', 'coverage', '.coverage',
+    }
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith('.')]
+
+        depth = dirpath.replace(root, '').count(os.sep)
+        if depth >= max_depth:
+            dirnames.clear()
+            continue
+
+        indent = '  ' * depth
+        dir_name = os.path.basename(dirpath) or root
+        lines.append(f"{indent}{dir_name}/")
+        count += 1
+
+        sub_indent = '  ' * (depth + 1)
+        for f in sorted(filenames)[:20]:
+            if count >= max_entries:
+                lines.append(f"{sub_indent}... (truncated)")
+                return '\n'.join(lines)
+            lines.append(f"{sub_indent}{f}")
+            count += 1
+
+    return '\n'.join(lines)
+
+
 async def planner_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
-    """Build structured task graph — §2/§3."""
-    from agent.core.llm_provider import get_llm
+    """Scan the project and create an implementation plan."""
+    from agent.core.llm_provider import get_llm_with_tools
+    from agent.graph.tools import glob, grep, ls, read, bash, exit_plan_mode
 
-    plan = state.get("plan_graph", {})
-    nodes = plan.get("nodes", [])
+    logger.info("Planner node: scanning project and creating plan...")
 
-    # Skip if plan exists and hasn't been invalidated
-    if nodes and not state.get("error"):
-        # Just advance to next subgoal
-        next_sg = _find_next_subgoal(nodes)
-        if next_sg:
-            return {
-                "current_subgoal": next_sg["id"],
-                "audit_log": [{
-                    "node": "planner",
-                    "action": "advance",
-                    "subgoal": next_sg["id"],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }],
-            }
-        return {}
-
-    app_config = config.get("configurable", {}).get("app_config", {})
-    llm = get_llm(app_config, temperature=0.2)
-
-    intent = state.get("intent", {})
     goal = state.get("goal", "")
+    configurable = config.get("configurable", {})
+    app_config = configurable.get("app_config", {})
 
-    # Fast-path for Telegram requests: keep plans small to reduce latency.
-    # For common "research + summary" tasks, a 3-step plan is sufficient.
+    # Read-only tools for scanning
+    read_only_tools = [glob, grep, ls, read, bash, exit_plan_mode]
+
     try:
-        source = (
-            (state.get("metadata", {}) or {}).get("source")
-            or (state.get("world_state", {}) or {}).get("user_context", {}).get("source")
-            or "local"
-        )
+        llm_with_tools = get_llm_with_tools(app_config, read_only_tools)
     except Exception:
-        source = "local"
+        from agent.core.llm_provider import get_llm
+        llm_raw = get_llm(app_config)
+        llm_with_tools = llm_raw.bind_tools(read_only_tools)
 
-    objective_text = str(intent.get("objective") or goal or "").lower()
-    if str(source).startswith("telegram") and any(k in objective_text for k in ("research", "summary", "summarize", "write a summary")):
-        plan_data = {
-            "nodes": [
-                {
-                    "id": "step_1",
-                    "task": f"Research the request and gather key facts for: {intent.get('objective', goal)}",
-                    "agent": "researcher",
-                    "tools": ["research_tool", "memory_tool"],
-                    "risk": "low",
-                    "validation": "Have 3-6 key facts/sources to support the summary.",
-                    "depends_on": [],
-                    "status": "pending",
-                },
-                {
-                    "id": "step_2",
-                    "task": "Draft the final user-facing summary (deliverable).",
-                    "agent": "coder",
-                    "tools": [],
-                    "risk": "low",
-                    "validation": "Summary is complete and readable.",
-                    "depends_on": ["step_1"],
-                    "status": "pending",
-                },
-                {
-                    "id": "step_3",
-                    "task": "Review the draft for correctness and clarity and request revisions if needed.",
-                    "agent": "critic",
-                    "tools": [],
-                    "risk": "low",
-                    "validation": "Critic approves the draft.",
-                    "depends_on": ["step_2"],
-                    "status": "pending",
-                },
-            ],
-            "edges": [["step_1", "step_2"], ["step_2", "step_3"]],
-        }
+    tool_map = {t.name: t for t in read_only_tools}
 
-        first_subgoal = plan_data["nodes"][0]["id"]
-        logger.info(f"Plan created: {len(plan_data['nodes'])} subgoals (telegram fast-path)")
-        return {
-            "plan_graph": plan_data,
-            "current_subgoal": first_subgoal,
-            "current_subgoal_index": 0,
-            "messages": [AIMessage(content=f"Plan created with {len(plan_data['nodes'])} steps.")],
-            "audit_log": [{
-                "node": "planner",
-                "action": "create_plan_fast",
-                "subgoals": len(plan_data["nodes"]),
-                "source": source,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }],
-        }
+    cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    dir_tree = _build_directory_tree(cwd, max_depth=2, max_entries=60)
 
-    user_content = f"OBJECTIVE: {intent.get('objective', goal)}\n"
-    if intent.get("constraints"):
-        user_content += f"CONSTRAINTS: {json.dumps(intent['constraints'])}\n"
-    if intent.get("assumptions"):
-        user_content += f"ASSUMPTIONS: {json.dumps(intent['assumptions'])}\n"
-    if intent.get("required_resources"):
-        user_content += f"RESOURCES: {json.dumps(intent['required_resources'])}\n"
-    if intent.get("success_criteria"):
-        user_content += f"SUCCESS CRITERIA: {intent['success_criteria']}\n"
-
-    # If there was a previous failure, provide context for re-planning
-    if state.get("error"):
-        user_content += f"\nPREVIOUS ATTEMPT FAILED: {state['error']}\n"
-        user_content += "Adjust the plan to avoid this failure.\n"
+    sys_prompt = PLANNER_SYSTEM_PROMPT.format(
+        cwd=cwd,
+        platform=platform.system(),
+        date=datetime.now().strftime("%Y-%m-%d"),
+        directory_tree=f"<directory_tree>\n{dir_tree}\n</directory_tree>" if dir_tree else "",
+    )
 
     messages = [
-        SystemMessage(content=PLANNER_PROMPT),
-        HumanMessage(content=user_content),
+        SystemMessage(content=sys_prompt),
+        HumanMessage(content=f"TASK: {goal}\n\nScan the project and create a detailed implementation plan for this task. Use glob, grep, read, and ls to understand the codebase first, then call exit_plan_mode with your plan."),
     ]
 
-    logger.info("⏳ Planner: Sending task decomposition to LLM...")
+    plan_text = None
 
     try:
-        response = await llm.ainvoke(messages)
-        text = response.content.strip()
-        logger.info(f"✓ Planner: LLM response received ({len(text)} chars)")
+        for round_num in range(MAX_SCAN_ROUNDS):
+            response = llm_with_tools.invoke(messages)
+            text = getattr(response, "content", "") or ""
+            tc_list = getattr(response, "tool_calls", []) or []
 
-        plan_data = _parse_plan_json(text)
-        if not isinstance(plan_data, dict) or "nodes" not in plan_data:
-            raise ValueError("Invalid plan structure")
+            messages.append(response)
 
-        # Validate: no circular deps
-        _validate_dag(plan_data)
+            if not tc_list:
+                # No tools called — check if it contains a plan
+                if len(text) > 100:
+                    plan_text = text
+                break
 
-        # Mark all nodes as pending
-        for node in plan_data.get("nodes", []):
-            node.setdefault("status", "pending")
+            for tc in tc_list:
+                tool_name = tc.get("name", "")
+                tool_args = tc.get("args", {})
+                tool_id = tc.get("id", f"plan_{round_num}")
 
-    except Exception as exc:
-        logger.warning(f"Plan generation failed: {exc}")
-        # Fallback: single-step plan
-        plan_data = {
-            "nodes": [
-                {
-                    "id": "step_1",
-                    "task": intent.get("objective", goal),
-                    "agent": "executor",
-                    "tools": [],
-                    "risk": "medium",
-                    "validation": "check result",
-                    "depends_on": [],
-                    "status": "pending",
-                },
-                {
-                    "id": "step_2",
-                    "task": "Review and verify the result",
-                    "agent": "critic",
-                    "tools": [],
-                    "risk": "low",
-                    "validation": "critic approved",
-                    "depends_on": ["step_1"],
-                    "status": "pending",
-                },
-            ],
-            "edges": [["step_1", "step_2"]],
-        }
+                # Block write operations in planning mode
+                if tool_name in ("write", "edit", "multi_edit"):
+                    result_str = "ERROR: Write operations are not allowed in planning mode. Use read-only tools."
+                    messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+                    continue
 
-    first_subgoal = plan_data["nodes"][0]["id"] if plan_data["nodes"] else ""
+                # Block destructive bash commands
+                if tool_name == "bash":
+                    cmd = tool_args.get("command", "")
+                    cmd_lower = cmd.lower().strip()
+                    destructive_prefixes = ["rm ", "del ", "mkdir ", "echo ", "mv ", "cp ", "npm install", "pip install", "git add", "git commit", "git push"]
+                    if any(cmd_lower.startswith(p) for p in destructive_prefixes):
+                        result_str = f"ERROR: '{cmd}' is destructive. Planning mode is read-only. Use ls, cat, find, git status, git log instead."
+                        messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+                        continue
+                    # Enforce timeout for bash in planning
+                    tool_args["timeout"] = min(tool_args.get("timeout", 15000), 15000)
 
-    logger.info(f"Plan created: {len(plan_data['nodes'])} subgoals")
+                # Check for exit_plan_mode — this means we have the plan
+                if tool_name == "exit_plan_mode":
+                    plan_text = tool_args.get("plan", text)
+                    result_str = "[PLAN SUBMITTED]"
+                    messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+                    logger.info(f"Planner: plan submitted ({len(plan_text)} chars)")
+                    break
+
+                # Execute read-only tool
+                try:
+                    tool_fn = tool_map.get(tool_name)
+                    if tool_fn:
+                        # Inject state for tools that need it
+                        if tool_name in ("edit", "multi_edit", "write", "exit_plan_mode"):
+                            tool_args["state"] = state
+                        result = tool_fn.invoke(tool_args)
+                        result_str = str(result)[:8000]
+                    else:
+                        result_str = f"Unknown tool: {tool_name}"
+                except Exception as e:
+                    result_str = f"Tool error: {e}"
+
+                messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+
+            if plan_text:
+                break
+
+            logger.info(f"Planner round {round_num + 1}: executed {len(tc_list)} tool(s)")
+
+    except Exception as e:
+        logger.error(f"Planner failed: {e}")
+        plan_text = f"Planning failed: {e}. The coder will proceed without a plan."
+
+    if not plan_text:
+        plan_text = "The planner could not generate a plan. The coder will analyze and implement the task directly."
+
+    logger.info(f"Planner completed. Plan length: {len(plan_text)} chars")
 
     return {
-        "plan_graph": plan_data,
-        "current_subgoal": first_subgoal,
-        "current_subgoal_index": 0,
-        "messages": [AIMessage(content=f"Plan created with {len(plan_data['nodes'])} steps.")],
+        "plan_text": plan_text,
+        "phase": "awaiting_approval",
+        "messages": [AIMessage(content=f"📋 **Implementation Plan**\n\n{plan_text}")],
         "audit_log": [{
             "node": "planner",
-            "action": "create_plan",
-            "subgoals": len(plan_data["nodes"]),
+            "action": "plan_created",
+            "plan_length": len(plan_text),
+            "scan_rounds": min(round_num + 1, MAX_SCAN_ROUNDS) if 'round_num' in dir() else 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }],
     }
-
-
-def _parse_plan_json(text: str) -> Dict[str, Any]:
-    """Parse plan JSON with repair for common LLM formatting errors."""
-    import re as _re
-
-    # 1. Try direct parse first
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # 2. Strip markdown code fences (```json ... ```)
-    stripped = _re.sub(r"^```(?:json)?\s*\n?", "", text, flags=_re.MULTILINE)
-    stripped = _re.sub(r"\n?```\s*$", "", stripped, flags=_re.MULTILINE).strip()
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        pass
-
-    # 3. Fix trailing commas before ] or }
-    fixed = _re.sub(r",\s*([\]}])", r"\1", stripped)
-    try:
-        return json.loads(fixed)
-    except json.JSONDecodeError:
-        pass
-
-    # 4. Extract JSON object substring from mixed text
-    match = _re.search(r"\{.*\}", fixed, flags=_re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    # 5. Fix single-quoted strings → double-quoted
-    dq = fixed.replace("'", '"')
-    try:
-        return json.loads(dq)
-    except json.JSONDecodeError:
-        pass
-
-    # 6. Nothing worked — raise so fallback kicks in
-    raise ValueError(f"Could not parse plan JSON after repair attempts ({len(text)} chars)")
-
-def _find_next_subgoal(nodes: List[Dict[str, Any]]) -> Dict[str, Any] | None:
-    """Find next pending subgoal with all dependencies met."""
-    for node in nodes:
-        if node.get("status") not in ("done", "skipped"):
-            deps = node.get("depends_on", [])
-            all_done = all(
-                any(n.get("id") == d and n.get("status") in ("done", "skipped") for n in nodes)
-                for d in deps
-            )
-            if all_done:
-                return node
-    return None
-
-
-def _validate_dag(plan: Dict[str, Any]) -> None:
-    """Validate that plan has no circular dependencies."""
-    nodes = {n["id"] for n in plan.get("nodes", [])}
-    edges = plan.get("edges", [])
-
-    # Simple cycle detection via DFS
-    adj: Dict[str, List[str]] = {n: [] for n in nodes}
-    for src, dst in edges:
-        adj.setdefault(src, []).append(dst)
-
-    visited = set()
-    stack = set()
-
-    def dfs(node: str) -> bool:
-        visited.add(node)
-        stack.add(node)
-        for neighbor in adj.get(node, []):
-            if neighbor in stack:
-                raise ValueError(f"Circular dependency detected: {node} → {neighbor}")
-            if neighbor not in visited:
-                dfs(neighbor)
-        stack.discard(node)
-
-    for n in nodes:
-        if n not in visited:
-            dfs(n)

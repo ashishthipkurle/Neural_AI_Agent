@@ -117,10 +117,11 @@ class LangGraphRuntime:
         image_data: str = None,
         source: str = "local",
         thread_id: str = None,
-    ) -> str:
+        proposal_mode: bool = False,
+    ) -> Any:
         """Execute the full graph for a user input.
 
-        Returns the final response text.
+        Returns the final response text, or a dict if proposal_mode is True.
         """
         await self._ensure_graph()
 
@@ -152,23 +153,17 @@ class LangGraphRuntime:
 
         # Human-friendly node labels for UI
         NODE_LABELS = {
-            "intent": "Analyzing intent...",
-            "policy": "Checking safety policy...",
-            "rollback_check": "Preparing rollback checkpoint...",
-            "supervisor": "Supervisor routing task...",
-            "planner": "Building task plan (LLM)...",
-            "researcher": "Researching information (LLM)...",
-            "coder": "Writing code (LLM)...",
-            "executor": "Executing tools...",
-            "critic": "Reviewing results (LLM)...",
-            "verification": "Verifying output...",
-            "failure": "Handling failure...",
+            "supervisor": "Routing task...",
+            "planner": "Scanning project & creating plan...",
+            "coder": "Implementing changes...",
             "completion": "Completing task...",
         }
 
         try:
             # Execute graph with streaming to emit progress
             final_state = None
+            accumulated_state = dict(state)
+
             async for event in self._graph.astream(state, config):
                 # event is a dict like {"node_name": {state_updates}}
                 if isinstance(event, dict):
@@ -181,13 +176,45 @@ class LangGraphRuntime:
                                 self.broadcast_fn("step", "system", f"✓ {label}", None)
                             except Exception:
                                 pass
-                        # Keep accumulating last state
+                        # Accumulate state updates
                         if isinstance(node_output, dict):
-                            final_state = node_output
+                            accumulated_state.update(node_output)
+                            final_state = accumulated_state
 
             # If stream didn't give us a final state, fall back
             if final_state is None:
                 final_state = state
+
+            # ── Check if graph paused for plan approval ──
+            phase = final_state.get("phase", "")
+            plan_text = final_state.get("plan_text")
+
+            if phase == "awaiting_approval" and plan_text:
+                logger.info(f"Graph paused: plan awaiting approval ({len(plan_text)} chars)")
+                if self.broadcast_fn:
+                    try:
+                        self.broadcast_fn("step", "system", "📋 Plan created — awaiting your approval", None)
+                    except Exception:
+                        pass
+
+                # Store the thread_id so we can resume later
+                self._pending_plans = getattr(self, '_pending_plans', {})
+                self._pending_plans[thread_id] = {
+                    "state": final_state,
+                    "config": config,
+                }
+
+                return {
+                    "needs_approval": True,
+                    "plan_text": plan_text,
+                    "thread_id": thread_id,
+                    "response": plan_text,
+                }
+
+            # ── Normal completion ──
+            patches = []
+            if proposal_mode:
+                patches = self._compute_patches_and_rollback(final_state)
 
             # Extract response
             response = self._extract_response(final_state)
@@ -206,41 +233,134 @@ class LangGraphRuntime:
                     )
 
             logger.info(f"Graph completed: {len(response)} chars")
+            if proposal_mode:
+                return {"response": response, "patches": patches}
             return response
 
         except Exception as exc:
             logger.error(f"Graph execution failed: {exc}")
             return f"I encountered an error processing your request: {exc}"
 
+    async def approve_plan(
+        self,
+        thread_id: str,
+        approved: bool = True,
+        feedback: str = "",
+        proposal_mode: bool = False,
+    ) -> Any:
+        """Resume the graph after user approves (or rejects) the plan.
+
+        Args:
+            thread_id: The thread ID from the plan response.
+            approved: Whether user approved the plan.
+            feedback: Optional user feedback to refine the plan.
+            proposal_mode: Whether to return patches for UI review.
+        """
+        await self._ensure_graph()
+
+        pending = getattr(self, '_pending_plans', {}).get(thread_id)
+        if not pending:
+            return "No pending plan found for this thread. Please submit your request again."
+
+        saved_state = pending["state"]
+
+        if not approved:
+            # Remove the pending plan
+            self._pending_plans.pop(thread_id, None)
+            return "Plan rejected. I'll wait for your next request."
+
+        # Re-run the graph with plan approved
+        state = dict(saved_state)
+        state["plan_approved"] = True
+        state["phase"] = "executing"
+
+        if feedback:
+            state["goal"] = state.get("goal", "") + f"\n\nUser feedback on plan: {feedback}"
+
+        # ── CRITICAL: use a FRESH thread_id for the resumed run ──
+        # The original graph run already completed (hit the END node) under
+        # the old thread_id.  If we reuse it, the SQLite checkpointer sees
+        # the graph as done and `astream` yields zero events → hang.
+        import uuid as _uuid
+        exec_thread_id = f"{thread_id}_exec_{_uuid.uuid4().hex[:8]}"
+        config = self._make_config(exec_thread_id)
+
+        logger.info(f"Resuming graph with approved plan for thread {thread_id} "
+                     f"(new execution thread: {exec_thread_id})")
+        if self.broadcast_fn:
+            try:
+                self.broadcast_fn("step", "system", "✅ Plan approved — starting execution...", None)
+            except Exception:
+                pass
+
+        try:
+            final_state = None
+            accumulated_state = dict(state)
+
+            logger.info(f"🚀 Starting graph astream for exec thread {exec_thread_id}...")
+            event_count = 0
+            async for event in self._graph.astream(state, config):
+                event_count += 1
+                logger.info(f"📡 Graph event #{event_count}: {type(event).__name__}")
+                if isinstance(event, dict):
+                    for node_name, node_output in event.items():
+                        NODE_LABELS = {
+                            "supervisor": "Routing...",
+                            "planner": "Planning...",
+                            "coder": "Implementing changes...",
+                            "completion": "Completing...",
+                        }
+                        label = NODE_LABELS.get(node_name, f"Running: {node_name}")
+                        logger.info(f"🟢 Graph node completed: {node_name}")
+                        if self.broadcast_fn:
+                            try:
+                                self.broadcast_fn("step", "system", f"✓ {label}", None)
+                            except Exception:
+                                pass
+                        if isinstance(node_output, dict):
+                            accumulated_state.update(node_output)
+                            final_state = accumulated_state
+
+            logger.info(f"🏁 Graph astream finished. Total events: {event_count}")
+
+            if final_state is None:
+                logger.warning(f"⚠️ astream yielded 0 events — using passed-in state as fallback")
+                final_state = state
+
+            # Clean up pending plan
+            self._pending_plans.pop(thread_id, None)
+
+            patches = []
+            if proposal_mode:
+                patches = self._compute_patches_and_rollback(final_state)
+
+            response = self._extract_response(final_state)
+
+            if self.stm:
+                self.stm.add_message("assistant", response)
+
+            logger.info(f"Plan execution completed: {len(response)} chars, {len(patches)} patches")
+
+            if proposal_mode:
+                return {"response": response, "patches": patches}
+            return response
+
+        except Exception as exc:
+            logger.error(f"Plan execution failed: {exc}", exc_info=True)
+            self._pending_plans.pop(thread_id, None)
+            return f"Error executing plan: {exc}"
+
     async def resume(
         self,
         thread_id: str,
         approval_data: Dict[str, Any],
     ) -> str:
-        """Resume a graph paused at human approval.
-
-        Args:
-            thread_id: The mission/thread ID.
-            approval_data: {"approved": bool, "feedback": str}
-        """
-        await self._ensure_graph()
-
-        config = self._make_config(thread_id)
-
-        try:
-            # Update state with approval response
-            update = {
-                "approval_response": "approved" if approval_data.get("approved") else "rejected",
-                "needs_approval": False,
-            }
-
-            final_state = await self._graph.ainvoke(update, config)
-            response = self._extract_response(final_state)
-            return response
-
-        except Exception as exc:
-            logger.error(f"Graph resume failed: {exc}")
-            return f"Error resuming task: {exc}"
+        """Resume a graph paused at human approval (legacy compatibility)."""
+        return await self.approve_plan(
+            thread_id=thread_id,
+            approved=approval_data.get("approved", False),
+            feedback=approval_data.get("feedback", ""),
+        )
 
     async def stream(
         self,
@@ -274,6 +394,57 @@ class LangGraphRuntime:
             return state.values if state else {}
         except Exception:
             return {}
+
+    @staticmethod
+    def _compute_patches_and_rollback(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        import difflib
+        import os
+        patches = []
+        original_contents = state.get("original_file_contents", {})
+        
+        for path_str, orig_content in original_contents.items():
+            try:
+                if os.path.exists(path_str):
+                    with open(path_str, "r", encoding="utf-8") as f:
+                        new_content = f.read()
+                else:
+                    new_content = None
+                    
+                if orig_content is None and new_content is None:
+                    continue
+                if orig_content == new_content:
+                    continue
+                    
+                is_new = (orig_content is None)
+                
+                orig_lines = orig_content.splitlines(keepends=True) if orig_content else []
+                new_lines = new_content.splitlines(keepends=True) if new_content else []
+                diff = "".join(difflib.unified_diff(
+                    orig_lines,
+                    new_lines,
+                    fromfile=path_str,
+                    tofile=path_str
+                ))
+                
+                patches.append({
+                    "file_path": path_str,
+                    "diff": diff,
+                    "is_new": is_new,
+                    "new_content": new_content 
+                })
+                
+                if orig_content is None:
+                    if os.path.exists(path_str):
+                        os.remove(path_str)
+                else:
+                    with open(path_str, "w", encoding="utf-8") as f:
+                        f.write(orig_content)
+                logger.info(f"Rolled back {path_str} to original state for proposal")
+                
+            except Exception as e:
+                logger.error(f"Error computing patch or rolling back {path_str}: {e}")
+                
+        return patches
 
     @staticmethod
     def _extract_response(state: Dict[str, Any]) -> str:

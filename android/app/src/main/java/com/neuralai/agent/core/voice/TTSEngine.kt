@@ -8,6 +8,14 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
@@ -16,12 +24,6 @@ import javax.inject.Singleton
 
 /**
  * Text-to-Speech engine with support for in-call audio.
- *
- * IMPORTANT: Android does NOT allow apps to inject audio directly into
- * telephony calls via STREAM_VOICE_CALL. Instead, we use the SPEAKERPHONE
- * approach: TTS plays through the device speaker (STREAM_MUSIC) at high
- * volume, and the phone's microphone picks it up and transmits it to
- * the other party.
  */
 @Singleton
 class TTSEngine @Inject constructor(
@@ -30,7 +32,12 @@ class TTSEngine @Inject constructor(
     companion object {
         private const val TAG = "TTSEngine"
         private const val TTS_TIMEOUT_MS = 30000L // 30 second safety timeout
+
+        private val _isSpeakingFlow = MutableStateFlow(false)
+        val isSpeakingFlow: StateFlow<Boolean> = _isSpeakingFlow.asStateFlow()
     }
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var tts: TextToSpeech? = null
     private var isInitialized = false
@@ -60,18 +67,25 @@ class TTSEngine @Inject constructor(
     fun speak(text: String) {
         if (!isInitialized) return
         val cleanText = cleanMarkdown(text)
+        _isSpeakingFlow.value = true
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(uttId: String?) {
+                _isSpeakingFlow.value = true
+            }
+            override fun onDone(uttId: String?) {
+                _isSpeakingFlow.value = false
+            }
+            override fun onError(uttId: String?) {
+                _isSpeakingFlow.value = false
+            }
+        })
         tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "response_${System.currentTimeMillis()}")
     }
 
     /**
      * Speak and wait for TTS to complete before returning.
-     * 
-     * During a call: Uses STREAM_MUSIC at max volume through the speaker.
-     * The speakerphone mic picks up the audio and transmits it to the caller.
-     * 
-     * @param duringCall If true, maximizes STREAM_MUSIC volume for mic pickup.
-     * @return true if TTS completed successfully
      */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     suspend fun speakAndWaitForCompletion(text: String, duringCall: Boolean = false): Boolean {
         if (!isInitialized) {
             Log.w(TAG, "TTS not initialized, cannot speak")
@@ -104,10 +118,12 @@ class TTSEngine @Inject constructor(
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(uttId: String?) {
                         Log.d(TAG, "TTS utterance started: $uttId")
+                        _isSpeakingFlow.value = true
                     }
 
                     override fun onDone(uttId: String?) {
                         Log.d(TAG, "TTS utterance completed: $uttId")
+                        _isSpeakingFlow.value = false
                         if (uttId == utteranceId && cont.isActive) {
                             cont.resume(true, onCancellation = null)
                         }
@@ -116,6 +132,7 @@ class TTSEngine @Inject constructor(
                     @Deprecated("Deprecated in API")
                     override fun onError(uttId: String?) {
                         Log.e(TAG, "TTS utterance error: $uttId")
+                        _isSpeakingFlow.value = false
                         if (uttId == utteranceId && cont.isActive) {
                             cont.resume(false, onCancellation = null)
                         }
@@ -152,6 +169,7 @@ class TTSEngine @Inject constructor(
     fun stopSpeaking() {
         if (tts?.isSpeaking == true) {
             tts?.stop()
+            _isSpeakingFlow.value = false
         }
     }
 

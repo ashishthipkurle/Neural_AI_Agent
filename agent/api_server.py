@@ -852,16 +852,112 @@ class CopilotRequest(BaseModel):
     user_input: Optional[str] = None  # Instructions or questions
     model_name: Optional[str] = None
 
+class PatchDetail(BaseModel):
+    file_path: str
+    diff: str
+    is_new: bool
+    new_content: Optional[str] = None
+
 class CopilotResponse(BaseModel):
     suggestions: List[dict] = [] # [{text: "..."}]
     diff: Optional[str] = None
     explanation: Optional[str] = None
     proposal_id: Optional[str] = None
     intent: Optional[str] = None
+    patches: Optional[List[PatchDetail]] = None
 
 class ApplyDiffRequest(BaseModel):
     proposal_id: str
     user_approved: bool
+
+class AgentProposeRequest(BaseModel):
+    instruction: str
+    active_file: Optional[str] = None
+
+class PlanApprovalRequest(BaseModel):
+    thread_id: str
+    approved: bool = True
+    feedback: Optional[str] = ""
+    active_file: Optional[str] = None
+
+@app.post("/api/agent/propose_edit", response_model=CopilotResponse)
+async def agent_propose_edit(request: AgentProposeRequest):
+    if not agent:
+        raise HTTPException(503, "Agent not initialized")
+        
+    prompt = f"The user requested: {request.instruction}\n"
+    if request.active_file:
+        prompt += f"Background context: They are currently looking at {request.active_file}\n"
+        
+    try:
+        result = await agent.process_input(prompt, source="local", proposal_mode=True)
+        
+        # Check if the result is a plan awaiting approval
+        if isinstance(result, dict) and result.get("needs_approval"):
+            plan_text = result.get("plan_text", "")
+            thread_id = result.get("thread_id", "")
+            return CopilotResponse(
+                intent="plan_awaiting_approval",
+                explanation=plan_text,
+                proposal_id=thread_id,
+            )
+        
+        if isinstance(result, dict) and "patches" in result:
+            patches_data = []
+            for p in result["patches"]:
+                patches_data.append(PatchDetail(**p))
+            
+            return CopilotResponse(
+                intent="multi_file_patch",
+                explanation=result.get("response", "Task completed."),
+                patches=patches_data
+            )
+        else:
+            return CopilotResponse(
+                intent="no_patch",
+                explanation=str(result)
+            )
+    except Exception as e:
+        logger.error(f"Agent proposal failed: {e}")
+        raise HTTPException(500, str(e))
+
+@app.post("/api/agent/approve_plan")
+async def approve_plan(request: PlanApprovalRequest):
+    """Approve or reject an implementation plan, then execute it."""
+    if not agent:
+        raise HTTPException(503, "Agent not initialized")
+    
+    if not agent._langgraph_runtime:
+        raise HTTPException(503, "LangGraph runtime not initialized")
+    
+    try:
+        logger.info(f"Plan {'approved' if request.approved else 'rejected'} for thread {request.thread_id}")
+        
+        result = await agent._langgraph_runtime.approve_plan(
+            thread_id=request.thread_id,
+            approved=request.approved,
+            feedback=request.feedback or "",
+            proposal_mode=True,
+        )
+        
+        if isinstance(result, dict) and "patches" in result:
+            patches_data = []
+            for p in result.get("patches", []):
+                patches_data.append(PatchDetail(**p))
+            
+            return CopilotResponse(
+                intent="multi_file_patch",
+                explanation=result.get("response", "Plan executed successfully."),
+                patches=patches_data
+            )
+        else:
+            return CopilotResponse(
+                intent="no_patch",
+                explanation=str(result)
+            )
+    except Exception as e:
+        logger.error(f"Plan approval failed: {e}")
+        raise HTTPException(500, str(e))
 
 @app.post("/api/copilot/suggest", response_model=CopilotResponse)
 async def copilot_suggest(request: CopilotRequest):

@@ -120,7 +120,7 @@ class MainViewModel @Inject constructor(
             try {
                 val response = neuralAgent.processInput(text)
                 addMessage(ChatMessage(text = response, sender = "agent"))
-                ttsEngine.speak(response)
+                ttsEngine.speakAndWaitForCompletion(response)
             } catch (e: Exception) {
                 addMessage(ChatMessage(text = "Error: ${e.message}", sender = "system"))
                 stateMachine.setState(AIState.ERROR, "SYSTEM ERROR")
