@@ -14,6 +14,8 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+from agent.core.hooks import HookRunner, HookEvent, HookContext, HookResult
+from agent.security.permissions import PermissionRequirement, PermissionDecision, PermissionManager
 
 logger = logging.getLogger("core.tool_schema")
 
@@ -33,6 +35,10 @@ class ToolSpec:
     requires_confirmation: bool
     input_schema: Dict[str, Any]   # JSON Schema
     output_schema: Dict[str, Any]  # JSON Schema
+    permission_requirement: Optional[PermissionRequirement] = None
+    timeout_seconds: int = 30
+    max_output_size: int = 10240
+    tags: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -108,10 +114,12 @@ def _type_matches(value: Any, json_type: str) -> bool:
 class ToolRegistry:
     """Registry of all tools with schema validation — §6."""
 
-    def __init__(self):
+    def __init__(self, permission_manager: Optional[PermissionManager] = None):
         self._specs: Dict[str, ToolSpec] = {}
         self._handlers: Dict[str, Callable] = {}
         self._rejected_log: List[Dict[str, Any]] = []
+        self.hook_runner = HookRunner()
+        self.permission_manager = permission_manager
 
     def register(self, spec: ToolSpec, handler: Callable) -> None:
         """Register a tool with its spec and handler."""
@@ -192,6 +200,41 @@ class ToolRegistry:
                     recovery_suggestion="Destructive action requires confirmation_token",
                 )
 
+        # Run pre-hooks
+        context = HookContext(tool_name=tool_name, tool_input=params)
+        hook_result = await self.hook_runner.run_pre_hooks(context)
+        if hook_result.denied:
+            return ToolResult(
+                status="error",
+                result=None,
+                error_type="HOOK_DENIED",
+                recovery_suggestion=hook_result.deny_reason or "Hook execution aborted."
+            )
+        if hook_result.updated_input:
+            params = hook_result.updated_input
+
+        # Check permissions using new mechanism if hooked/available
+        if self.permission_manager:
+            if hook_result.permission_override:
+                pass # Handled by hook
+            else:
+                decision = self.permission_manager.check_tool_permission(tool_name, params)
+                if decision == PermissionDecision.DENY:
+                    return ToolResult(
+                        status="error",
+                        result=None,
+                        error_type="PERMISSION_DENIED",
+                        recovery_suggestion="Tool action blocked by permission policy."
+                    )
+                elif decision == PermissionDecision.ASK:
+                    if spec.risk_level == RiskLevel.DESTRUCTIVE and not confirmation_token:
+                        return ToolResult(
+                            status="error",
+                            result=None,
+                            error_type="AUTH_ERROR",
+                            recovery_suggestion="Action requires explicit configuration or permission.",
+                        )
+
         # Execute
         try:
             import asyncio
@@ -208,6 +251,9 @@ class ToolRegistry:
             else:
                 result = ToolResult(status="success", result=str(raw))
 
+            # Run post-hooks
+            await self.hook_runner.run_post_hooks(context, result)
+
         except Exception as exc:
             from agent.core.failure_types import classify_failure
             ft = classify_failure(exc)
@@ -217,6 +263,8 @@ class ToolRegistry:
                 error_type=ft.value,
                 recovery_suggestion=str(exc),
             )
+            # Run post-failure hooks
+            await self.hook_runner.run_post_failure_hooks(context, exc)
 
         # Output validation
         output_errors = self.validate_output(tool_name, result)

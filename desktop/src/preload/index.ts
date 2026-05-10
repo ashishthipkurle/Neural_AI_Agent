@@ -68,9 +68,7 @@ const systemAPI = {
     openApp: (appName: string): Promise<{ approved: boolean }> =>
         ipcRenderer.invoke('system:openApp', appName),
     openUrl: (url: string): Promise<void> =>
-        ipcRenderer.invoke('system:openUrl', url),
-    captureWebview: (): Promise<string | null> =>
-        ipcRenderer.invoke('system:captureWebview')
+        ipcRenderer.invoke('system:openUrl', url)
 }
 
 // Menu API

@@ -4,10 +4,12 @@ import subprocess
 import logging
 import json
 from agent.security.permissions import PermissionManager
+from agent.security.sandbox import SecureCommandRunner
 
 class OSTools:
     def __init__(self):
         self.permissions = PermissionManager()
+        self.command_runner = SecureCommandRunner()
         self.logger = logging.getLogger("OSTools")
         self.app_index = {}
         self._build_app_index()
@@ -151,7 +153,7 @@ class OSTools:
         except Exception as e:
             return f"Error deleting path: {e}"
 
-    def launch_app(self, app_name: str, extra_args: str = None) -> str:
+    async def launch_app(self, app_name: str, extra_args: str = None) -> str:
         """
         Launches an application. 
         1. Checks hardcoded safe aliases.
@@ -268,7 +270,7 @@ class OSTools:
                         raw_arg = raw_arg[1:-1]
                     
                     self.logger.info(f"Direct Popen: '{target}' '{raw_arg}'")
-                    subprocess.Popen([target, raw_arg])
+                    await self.command_runner.run(f"{target} {raw_arg}")
                     return f"Launched {app_name} directly"
 
                 # Fallback to start
@@ -277,7 +279,7 @@ class OSTools:
                 cmd = f'start "" "{target}"'
                 
             self.logger.info(f"Executing: {cmd}")
-            subprocess.Popen(cmd, shell=True)
+            await self.command_runner.run(cmd)
             
             # Wait for app to open (rudimentary fix for typing race condition)
             import time

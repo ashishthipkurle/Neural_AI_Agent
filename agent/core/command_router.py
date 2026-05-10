@@ -5,6 +5,7 @@ import webbrowser
 import subprocess
 from typing import Dict, Any, List, Tuple
 from agent.tools.os_tools import OSTools
+from agent.security.sandbox import SecureCommandRunner
 from agent.core.pc_commands import (
     APP_REGISTRY, WEBSITE_REGISTRY,
     SYSTEM_POWER_COMMANDS, VOLUME_COMMANDS, BRIGHTNESS_COMMANDS,
@@ -33,6 +34,7 @@ class CommandRouter:
     def __init__(self):
         self.logger = logging.getLogger("CommandRouter")
         self.os_tools = OSTools()
+        self.command_runner = SecureCommandRunner()
         
         # Use the comprehensive registries from pc_commands
         self.known_apps = list(APP_REGISTRY.keys())
@@ -57,7 +59,12 @@ class CommandRouter:
         
         # EXCEPTION: If input looks like "search X on Y" (browser specific), let IntentParser handle it.
         # This prevents this simple regex router from stealing complex browser-launch intents.
-        if "search" in u and (" on " in u or " using " in u):
+        if "search" in u and (" on " in u or " using " in u or " in " in u):
+            return False
+            
+        # EXCEPTION: Compound browser launch + search should go to LLM to preserve intent
+        # e.g., "open chrome and search cars"
+        if " and search " in u and any(b in u for b in ["chrome", "browser", "edge", "firefox", "brave"]):
             return False
         
         # EXCEPTION: Mission mode commands go to SkillRouter
@@ -227,7 +234,7 @@ class CommandRouter:
             "switch_user": "Switching user...",
         }
         
-        subprocess.Popen(cmd, shell=True)
+        await self.command_runner.run(cmd)
         return {"response": messages.get(operation, "Done"), "action_taken": True}
 
     # ======================== VOLUME ========================
@@ -244,22 +251,13 @@ class CommandRouter:
                 step = params.get("step", 10)
                 
                 if vol_action == "mute":
-                    subprocess.run(
-                        'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"')
                     return {"response": "Muted.", "action_taken": True}
                 elif vol_action == "unmute":
-                    subprocess.run(
-                        'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"')
                     return {"response": "Unmuted.", "action_taken": True}
                 elif vol_action == "toggle_mute":
-                    subprocess.run(
-                        'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"')
                     return {"response": "Toggled mute.", "action_taken": True}
                 elif vol_action in ("mute_mic", "unmute_mic"):
                     # Use pyautogui to simulate mic mute key if available
@@ -274,22 +272,16 @@ $diff = $target - $current;
 if ($diff -gt 0) {{ for ($i=0; $i -lt [math]::Abs($diff/2); $i++) {{ $vol.SendKeys([char]175) }} }}
 else {{ for ($i=0; $i -lt [math]::Abs($diff/2); $i++) {{ $vol.SendKeys([char]174) }} }}
 "'''
-                    subprocess.run(ps_cmd, shell=True, capture_output=True)
+                    await self.command_runner.run(ps_cmd)
                     return {"response": f"Volume set to {level}%.", "action_taken": True}
                 elif direction == "up":
                     # Volume up key
                     for _ in range(step // 2):
-                        subprocess.run(
-                            'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]175)"',
-                            shell=True, capture_output=True
-                        )
+                        await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]175)"')
                     return {"response": f"Volume increased.", "action_taken": True}
                 elif direction == "down":
                     for _ in range(step // 2):
-                        subprocess.run(
-                            'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]174)"',
-                            shell=True, capture_output=True
-                        )
+                        await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]174)"')
                     return {"response": f"Volume decreased.", "action_taken": True}
             
             return {"response": "Volume control not available.", "action_taken": False}
@@ -310,7 +302,7 @@ else {{ for ($i=0; $i -lt [math]::Abs($diff/2); $i++) {{ $vol.SendKeys([char]174
                     ps_cmd = f'''powershell -Command "
 (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {level})
 "'''
-                    subprocess.run(ps_cmd, shell=True, capture_output=True)
+                    await self.command_runner.run(ps_cmd)
                     return {"response": f"Brightness set to {level}%.", "action_taken": True}
                 elif direction == "up":
                     ps_cmd = f'''powershell -Command "
@@ -318,7 +310,7 @@ $cur = (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBr
 $new = [math]::Min(100, $cur + {step});
 (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, $new)
 "'''
-                    subprocess.run(ps_cmd, shell=True, capture_output=True)
+                    await self.command_runner.run(ps_cmd)
                     return {"response": "Brightness increased.", "action_taken": True}
                 elif direction == "down":
                     ps_cmd = f'''powershell -Command "
@@ -326,7 +318,7 @@ $cur = (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBr
 $new = [math]::Max(0, $cur - {step});
 (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, $new)
 "'''
-                    subprocess.run(ps_cmd, shell=True, capture_output=True)
+                    await self.command_runner.run(ps_cmd)
                     return {"response": "Brightness decreased.", "action_taken": True}
                     
             return {"response": "Brightness control not available.", "action_taken": False}
@@ -348,29 +340,17 @@ $new = [math]::Max(0, $cur - {step});
                 transparency = params.get("transparency")
                 
                 if mode == "dark":
-                    subprocess.run(
-                        'reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v AppsUseLightTheme /t REG_DWORD /d 0 /f',
-                        shell=True, capture_output=True
-                    )
-                    subprocess.run(
-                        'reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v SystemUsesLightTheme /t REG_DWORD /d 0 /f',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v AppsUseLightTheme /t REG_DWORD /d 0 /f')
+                    await self.command_runner.run('reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v SystemUsesLightTheme /t REG_DWORD /d 0 /f')
                     return {"response": "Dark mode enabled.", "action_taken": True}
                 elif mode == "light":
-                    subprocess.run(
-                        'reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v AppsUseLightTheme /t REG_DWORD /d 1 /f',
-                        shell=True, capture_output=True
-                    )
-                    subprocess.run(
-                        'reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v SystemUsesLightTheme /t REG_DWORD /d 1 /f',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v AppsUseLightTheme /t REG_DWORD /d 1 /f')
+                    await self.command_runner.run('reg add HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize /v SystemUsesLightTheme /t REG_DWORD /d 1 /f')
                     return {"response": "Light mode enabled.", "action_taken": True}
                 elif night_light is not None:
                     state = "on" if night_light else "off"
                     # Toggle via Settings URI
-                    subprocess.Popen('start ms-settings:nightlight', shell=True)
+                    await self.command_runner.run('start ms-settings:nightlight')
                     return {"response": f"Night light {state}. Settings opened.", "action_taken": True}
                 elif desktop_icons is not None:
                     return {"response": f"Desktop icons {'shown' if desktop_icons else 'hidden'}.", "action_taken": True}
@@ -395,10 +375,7 @@ $new = [math]::Max(0, $cur - {step});
                 
                 if operation == "minimize_all" or operation == "show_desktop":
                     # Win+D to show desktop
-                    subprocess.run(
-                        'powershell -Command "(New-Object -ComObject Shell.Application).MinimizeAll()"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('powershell -Command "(New-Object -ComObject Shell.Application).MinimizeAll()"')
                     return {"response": "All windows minimized.", "action_taken": True}
                     
                 elif operation == "close_all":
@@ -415,41 +392,26 @@ $new = [math]::Max(0, $cur - {step});
                         "bottom_right": "#{Right}{Down}",
                     }
                     key_seq = snap_keys.get(position, "#{Left}")
-                    subprocess.run(
-                        f'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'{key_seq}\')"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run(f'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'{key_seq}\')"')
                     return {"response": f"Window snapped to {position}.", "action_taken": True}
                     
                 elif operation == "task_view":
-                    subprocess.run(
-                        'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'#{Tab}\')"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'#{Tab}\')"')
                     return {"response": "Task view opened.", "action_taken": True}
                     
                 elif operation == "new_virtual_desktop":
-                    subprocess.run(
-                        'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'^#{d}\')"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'^#{d}\')"')
                     return {"response": "New virtual desktop created.", "action_taken": True}
                     
                 elif operation == "close_virtual_desktop":
-                    subprocess.run(
-                        'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'^#{F4}\')"',
-                        shell=True, capture_output=True
-                    )
+                    await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'^#{F4}\')"')
                     return {"response": "Virtual desktop closed.", "action_taken": True}
                     
                 elif operation == "switch_virtual_desktop":
                     desktop_num = params.get("desktop_number", 2)
                     if desktop_num > 1:
                         for _ in range(desktop_num - 1):
-                            subprocess.run(
-                                'powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'^#{Right}\')"',
-                                shell=True, capture_output=True
-                            )
+                            await self.command_runner.run('powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'^#{Right}\')"')
                     return {"response": f"Switched to desktop {desktop_num}.", "action_taken": True}
                     
                 elif operation == "always_on_top":
@@ -490,10 +452,10 @@ $new = [math]::Max(0, $cur - {step});
         try:
             if os.name == "nt":
                 if mode == "full":
-                    subprocess.Popen('snippingtool /clip', shell=True)
+                    await self.command_runner.run('snippingtool /clip')
                     return {"response": "Screenshot taken.", "action_taken": True}
                 elif mode == "region":
-                    subprocess.Popen('snippingtool', shell=True)
+                    await self.command_runner.run('snippingtool')
                     return {"response": "Snipping tool opened for region capture.", "action_taken": True}
                 elif mode == "active_window":
                     try:
@@ -537,7 +499,7 @@ $new = [math]::Max(0, $cur - {step});
         
         folder = folder_map.get(location)
         if folder and os.path.exists(folder):
-            subprocess.Popen(f'explorer "{folder}"', shell=True)
+            await self.command_runner.run(f'explorer "{folder}"')
             return {"response": f"Opened {location.title()} folder.", "action_taken": True}
         
         return {"response": f"Folder not found: {location}", "action_taken": False}
@@ -549,10 +511,7 @@ $new = [math]::Max(0, $cur - {step});
         operation = params.get("operation", "")
         
         if operation == "empty_recycle_bin" and os.name == "nt":
-            subprocess.run(
-                'powershell -Command "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"',
-                shell=True, capture_output=True
-            )
+            await self.command_runner.run('powershell -Command "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"')
             return {"response": "Recycle bin emptied.", "action_taken": True}
         
         return {"response": f"File operation: {operation}", "action_taken": True}
@@ -565,10 +524,10 @@ $new = [math]::Max(0, $cur - {step});
         
         if os.name == "nt":
             if operation == "disk_cleanup":
-                subprocess.Popen("cleanmgr.exe", shell=True)
+                await self.command_runner.run("cleanmgr.exe")
                 return {"response": "Disk Cleanup opened.", "action_taken": True}
             elif operation == "defrag":
-                subprocess.Popen("dfrgui.exe", shell=True)
+                await self.command_runner.run("dfrgui.exe")
                 return {"response": "Disk Defragmenter opened.", "action_taken": True}
             elif operation == "chkdsk":
                 return {"response": "Disk check will run on next restart.", "action_taken": True}
@@ -587,7 +546,7 @@ $new = [math]::Max(0, $cur - {step});
         
         if os.name == "nt":
             settings_uri = f"ms-settings:{page}" if page != "main" else "ms-settings:"
-            subprocess.Popen(f'start {settings_uri}', shell=True)
+            await self.command_runner.run(f'start {settings_uri}')
             return {"response": f"Settings opened ({page}).", "action_taken": True}
         
         return {"response": "Settings opened.", "action_taken": True}
@@ -600,7 +559,7 @@ $new = [math]::Max(0, $cur - {step});
         
         try:
             if operation == "show_ip":
-                result = subprocess.run("ipconfig", shell=True, capture_output=True, text=True, timeout=10)
+                result = await self.command_runner.run("ipconfig")
                 # Extract IPv4 addresses
                 import re
                 ips = re.findall(r'IPv4 Address[.\s]*:\s*(\d+\.\d+\.\d+\.\d+)', result.stdout)
@@ -609,11 +568,11 @@ $new = [math]::Max(0, $cur - {step});
                 return {"response": "Could not determine IP address.", "action_taken": False}
                 
             elif operation == "flush_dns":
-                subprocess.run("ipconfig /flushdns", shell=True, capture_output=True)
+                await self.command_runner.run("ipconfig /flushdns")
                 return {"response": "DNS cache flushed.", "action_taken": True}
                 
             elif operation == "check_connectivity":
-                result = subprocess.run("ping -n 1 8.8.8.8", shell=True, capture_output=True, text=True, timeout=5)
+                result = await self.command_runner.run("ping -n 1 8.8.8.8")
                 if result.returncode == 0:
                     return {"response": "Yes, the internet is working.", "action_taken": True}
                 return {"response": "Internet connection appears to be down.", "action_taken": True}
@@ -623,11 +582,11 @@ $new = [math]::Max(0, $cur - {step});
                 return {"response": "Speed test opened in browser.", "action_taken": True}
                 
             elif operation == "status":
-                subprocess.Popen("start ms-settings:network-status", shell=True)
+                await self.command_runner.run("start ms-settings:network-status")
                 return {"response": "Network status opened.", "action_taken": True}
                 
             elif operation in ("connect_vpn", "disconnect_vpn"):
-                subprocess.Popen("start ms-settings:network-vpn", shell=True)
+                await self.command_runner.run("start ms-settings:network-vpn")
                 return {"response": f"VPN settings opened.", "action_taken": True}
                 
             elif operation in ("enable_wifi", "disable_wifi"):
@@ -635,7 +594,7 @@ $new = [math]::Max(0, $cur - {step});
                 return {"response": f"WiFi {state}.", "action_taken": True}
                 
             elif operation == "scan_wifi":
-                subprocess.Popen("start ms-settings:network-wifi", shell=True)
+                await self.command_runner.run("start ms-settings:network-wifi")
                 return {"response": "WiFi settings opened for scanning.", "action_taken": True}
                 
         except Exception as e:
@@ -651,10 +610,7 @@ $new = [math]::Max(0, $cur - {step});
             if os.name == "nt":
                 if not process_name.endswith(".exe"):
                     process_name += ".exe"
-                result = subprocess.run(
-                    f"taskkill /IM {process_name} /F",
-                    shell=True, capture_output=True, text=True
-                )
+                result = await self.command_runner.run(f"taskkill /IM {process_name} /F")
                 if result.returncode == 0:
                     return {"response": f"Process {process_name} terminated.", "action_taken": True}
                 return {"response": f"Could not find process: {process_name}", "action_taken": False}
@@ -684,18 +640,13 @@ $new = [math]::Max(0, $cur - {step});
             try:
                 if app_path.startswith("ms-") or ":" in app_path and not app_path[1] == ":":
                     # URI scheme (ms-settings:, ms-teams:, etc.)
-                    subprocess.Popen(f'start {app_path}', shell=True)
+                    await self.command_runner.run(f'start {app_path}')
                 elif app_path.endswith(".msc"):
-                    subprocess.Popen(app_path, shell=True)
+                    await self.command_runner.run(app_path)
                 elif "shell:AppsFolder" in app_path:
-                    subprocess.Popen(f'explorer {app_path}', shell=True)
+                    await self.command_runner.run(f'explorer {app_path}')
                 else:
-                    subprocess.Popen(
-                        [app_path],
-                        shell=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
+                    await self.command_runner.run([app_path])
                 return {
                     "response": f"Opening {target_lower}",
                     "action_taken": True,
@@ -703,7 +654,7 @@ $new = [math]::Max(0, $cur - {step});
             except Exception as e:
                 # Fallback to os_tools
                 try:
-                    result = self.os_tools.launch_app(target_lower)
+                    result = await self.os_tools.launch_app(target_lower)
                     return {"response": f"Opening {target_lower}", "action_taken": True, "tool_output": result}
                 except Exception as e2:
                     return {"response": f"Failed to open {target_lower}: {e2}", "action_taken": False}
@@ -712,7 +663,7 @@ $new = [math]::Max(0, $cur - {step});
         app_name = self._extract_app_name(target)
         self.logger.info(f"Opening app (fallback): {app_name}")
         try:
-            result = self.os_tools.launch_app(app_name)
+            result = await self.os_tools.launch_app(app_name)
             return {
                 "response": f"Opening {app_name}",
                 "action_taken": True,

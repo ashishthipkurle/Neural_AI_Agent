@@ -25,7 +25,6 @@ export interface ElectronAPI {
         runCommand: (cmd: string) => Promise<{ approved: boolean, output?: string, error?: string }>
         openApp: (appName: string) => Promise<{ approved: boolean }>
         openUrl: (url: string) => Promise<void>
-        captureWebview: () => Promise<string | null>
     }
     menu: {
         onNewFile: (cb: () => void) => void

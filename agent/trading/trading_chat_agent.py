@@ -60,7 +60,7 @@ class TradingChatAgent:
 
     def handle_query(self, query: str) -> Dict[str, Any]:
         """
-        Process a user query and return a grounded response.
+        Process a user query and return a grounded response using the AI LLM.
 
         Args:
             query: Natural language question about current market state
@@ -68,36 +68,77 @@ class TradingChatAgent:
         Returns:
             dict with response text, referenced data, and source engine
         """
-        query_lower = query.lower().strip()
-
-        # ── Route to appropriate handler ───────────────────────
-        if any(k in query_lower for k in ["bias", "direction", "bullish", "bearish"]):
-            return self._explain_bias()
-        elif any(k in query_lower for k in ["confidence", "score", "quality"]):
-            return self._explain_confidence()
-        elif any(k in query_lower for k in ["regime", "market type", "market mode"]):
-            return self._explain_regime()
-        elif any(k in query_lower for k in ["size", "position", "kelly", "allocation"]):
-            return self._explain_sizing()
-        elif any(k in query_lower for k in ["risk", "drawdown", "halt", "mode"]):
-            return self._explain_risk()
-        elif any(k in query_lower for k in ["screen", "scan", "top", "best", "rank"]):
-            return self._explain_screener()
-        elif any(k in query_lower for k in ["signal", "trade", "active", "lifecycle"]):
-            return self._explain_signals()
-        elif any(k in query_lower for k in ["structure", "support", "resistance", "pattern"]):
-            return self._explain_structure()
-        elif any(k in query_lower for k in ["summary", "overview", "status", "everything"]):
-            return self._full_summary()
-        else:
+        try:
+            import openai
+            
+            # Gather current deterministic engine state
+            state_summary_dict = self._full_summary()
+            state_summary = state_summary_dict.get("response", "No engine state available yet.")
+            
+            # Setup the LLM via Ollama using standard OpenAI client
+            client = openai.OpenAI(
+                base_url="http://localhost:11434/v1",
+                api_key="ollama"
+            )
+            
+            # Construct the prompt
+            system_prompt = (
+                "You are Neural, Ashish's personal trading copilot.\n"
+                "You're knowledgeable, friendly, and talk like a sharp trader friend.\n"
+                "Use the engine data below to answer — don't make up numbers.\n"
+                "Keep it conversational. If there's no data, just say so naturally.\n"
+                "If greeted, greet back warmly.\n\n"
+                f"=== CURRENT ENGINE STATE ===\n{state_summary}\n============================"
+            )
+            
+            # Generate response
+            response = client.chat.completions.create(
+                model="qwen3-coder:480b-cloud",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query}
+                ],
+                temperature=0.3
+            )
+            
             return {
-                "response": (
-                    "I can explain: bias, confidence, regime, sizing, risk mode, "
-                    "screener results, active signals, or structure. What would you like to know?"
-                ),
-                "source": "ROUTER",
-                "data": {},
+                "response": response.choices[0].message.content,
+                "source": "Ollama LLM",
+                "data": self._engine_state
             }
+            
+        except Exception as e:
+            self.logger.error(f"LLM Chat Error (OpenAI client): {e}", exc_info=True)
+            
+            # Fallback to the old router if the LLM fails or is unavailable
+            query_lower = query.lower().strip()
+            if any(k in query_lower for k in ["bias", "direction", "bullish", "bearish"]):
+                return self._explain_bias()
+            elif any(k in query_lower for k in ["confidence", "score", "quality"]):
+                return self._explain_confidence()
+            elif any(k in query_lower for k in ["regime", "market type", "market mode"]):
+                return self._explain_regime()
+            elif any(k in query_lower for k in ["size", "position", "kelly", "allocation"]):
+                return self._explain_sizing()
+            elif any(k in query_lower for k in ["risk", "drawdown", "halt", "mode"]):
+                return self._explain_risk()
+            elif any(k in query_lower for k in ["screen", "scan", "top", "best", "rank"]):
+                return self._explain_screener()
+            elif any(k in query_lower for k in ["signal", "trade", "active", "lifecycle"]):
+                return self._explain_signals()
+            elif any(k in query_lower for k in ["structure", "support", "resistance", "pattern"]):
+                return self._explain_structure()
+            elif any(k in query_lower for k in ["summary", "overview", "status", "everything"]):
+                return self._full_summary()
+            else:
+                return {
+                    "response": (
+                        "I can explain: bias, confidence, regime, sizing, risk mode, "
+                        "screener results, active signals, or structure. What would you like to know?"
+                    ),
+                    "source": "ROUTER_FALLBACK",
+                    "data": {},
+                }
 
     def _explain_bias(self) -> Dict[str, Any]:
         bias = self._engine_state.get("bias", {})

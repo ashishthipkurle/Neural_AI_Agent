@@ -29,7 +29,7 @@ import remarkGfm from "remark-gfm";
 import AIGlobe from "./components/AIGlobe";
 import CodeEditorView from "./components/CodeEditor/CodeEditorView";
 import Dashboard from "./components/Dashboard/Dashboard";
-import TradingView from "./components/Dashboard/TradingView";
+import TradingTerminal from "./components/Dashboard/TradingTerminal";
 import { api } from "./lib/api";
 
 /* ================= TYPES ================= */
@@ -521,10 +521,20 @@ function CommandFeed({
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const listRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [userScrolledUp, setUserScrolledUp] = useState(false);
 
-    // Auto-scroll to bottom
-    useEffect(() => {
+    // Track if user has scrolled up
+    const handleScroll = () => {
         if (listRef.current) {
+            const { scrollTop, scrollHeight, clientHeight } = listRef.current;
+            const isNearBottom = scrollHeight - scrollTop - clientHeight < 80;
+            setUserScrolledUp(!isNearBottom);
+        }
+    };
+
+    // Auto-scroll to bottom only if user is already near bottom
+    useEffect(() => {
+        if (listRef.current && !userScrolledUp) {
             listRef.current.scrollTop = listRef.current.scrollHeight;
         }
     }, [messages]);
@@ -585,6 +595,7 @@ function CommandFeed({
 
             <div
                 ref={listRef}
+                onScroll={handleScroll}
                 className="flex-1 px-5 py-4 space-y-4 text-base text-slate-200/90 overflow-y-auto min-h-[150px]"
             >
                 {messages.map((m) => (
@@ -1600,7 +1611,7 @@ export default function NeuralInterface() {
 
             {/* TRADING FULL-SCREEN OVERLAY */}
             {showTradingPanel && (
-                <TradingView onClose={() => setShowTradingPanel(false)} />
+                <TradingTerminal onClose={() => setShowTradingPanel(false)} />
             )}
 
             <Dashboard isOpen={showDashboard} onClose={() => setShowDashboard(false)} />

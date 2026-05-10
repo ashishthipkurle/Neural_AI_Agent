@@ -1,179 +1,352 @@
 import { create } from 'zustand';
 
-export type SignalLifecycleState = 'IDLE' | 'GENERATED' | 'LOCKED' | 'ACTIVE' | 'CLOSED' | 'RESET';
+// ══════════════════════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ══════════════════════════════════════════════════════════════
 
-export interface ActiveSignal {
+export interface CandleData {
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+}
+
+export interface Position {
+    symbol: string;
+    side: string;
+    quantity: number;
+    avg_entry_price: number;
+    current_price: number;
+    unrealized_pnl: number;
+}
+
+export interface Signal {
     signal_id: string;
-    version_number: number;
     asset: string;
-    direction: 'LONG' | 'SHORT';
-    state: SignalLifecycleState;
+    direction: string;
     entry_price: number;
     stop_price: number;
     target_price: number;
-    candle_index: number;
-    timeframe: string;
+    state: string;
     confidence: number;
-    position_size_pct: number;
-    current_r: number;
-    highest_r: number;
-    candles_elapsed: number;
-    is_terminal: boolean;
-    resolution_reason: string | null;
-    metadata: Record<string, any>;
+    strategy_name: string;
+    created_at: number;
 }
+
+export interface TradeRecord {
+    trade_id: string;
+    symbol: string;
+    direction: string;
+    entry_price: number;
+    exit_price: number;
+    quantity: number;
+    net_pnl: number;
+    r_achieved: number;
+    strategy_name: string;
+    closed_at: number;
+}
+
+export interface OrderRecord {
+    order_id: string;
+    symbol: string;
+    side: string;
+    order_type: string;
+    quantity: number;
+    price: number;
+    status: string;
+    created_at: number;
+}
+
+export interface PortfolioState {
+    status: string;
+    mode: string;
+    total_equity: number;
+    cash_balance: number;
+    buying_power: number;
+    drawdown_pct: number;
+    risk_mode: string;
+    open_positions: number;
+    total_trades: number;
+    total_pnl: number;
+    broker_live: boolean;
+    positions: Position[];
+}
+
+export interface RiskState {
+    mode: string;
+    kill_switch_active: boolean;
+    kill_switch_reason: string;
+    drawdown_pct: number;
+    broker_connected: boolean;
+    circuit_breaker: { is_open: boolean; failures: number };
+}
+
+export interface SystemStatus {
+    running: boolean;
+    mode: string;
+    market: string;
+    bar_counter: number;
+    symbols: string[];
+    broker: Record<string, any>;
+}
+
+export interface IndicatorData {
+    rsi: number[];
+    macd: { line: number[]; signal: number[]; histogram: number[] };
+    atr: number[];
+    bollinger: { upper: number[]; middle: number[]; lower: number[] };
+}
+
+// ══════════════════════════════════════════════════════════════
+// STORE
+// ══════════════════════════════════════════════════════════════
 
 export interface TradingState {
-    // Idempotency tracking
-    lastSequenceNumber: number;
+    // Symbol selection
+    selectedSymbol: string;
+    selectedTimeframe: string;
+    symbols: string[];
+    market: string;
 
-    // Core state from snapshot
-    systemHalted: boolean;
-    activeSignals: Record<string, ActiveSignal>; // Mapped by signal_id
-    portfolioState: Record<string, any>;
-    riskState: Record<string, any>;
+    // Market data
+    candles: CandleData[];
+    indicators: IndicatorData | null;
 
-    // Debug/Diagnostics
-    lastSnapshotUtc: number | null;
-    lastEventTimestampUtc: number | null;
-    engineClockHash: string | null;
+    // Portfolio
+    portfolio: PortfolioState | null;
 
-    // Snapshot Race Barrier
-    hasReceivedSnapshot: boolean;
-    eventBuffer: any[];
+    // Signals and Trades
+    activeSignals: Signal[];
+    tradeHistory: TradeRecord[];
+    recentOrders: OrderRecord[];
+    tradeStats: { total: number; wins: number; losses: number; win_rate: number; total_net_pnl: number; avg_r: number };
+
+    // Risk & System
+    riskState: RiskState | null;
+    systemStatus: SystemStatus | null;
+
+    // Connection
+    wsConnected: boolean;
+    lastUpdate: number;
+    loading: boolean;
+    error: string | null;
 
     // Actions
-    processEvent: (payload: any) => void;
-    processSnapshot: (payload: any) => void;
-    clearSignals: () => void;
+    setMarket: (market: string) => Promise<void>;
+    setSymbol: (symbol: string) => void;
+    setTimeframe: (tf: string) => void;
+    fetchAll: () => Promise<void>;
+    fetchCandles: () => Promise<void>;
+    fetchIndicators: () => Promise<void>;
+    connectWebSocket: () => void;
+    disconnectWebSocket: () => void;
 }
 
+const API = 'http://localhost:8000';
+const WS_API = 'ws://localhost:8000';
+
+let wsInstance: WebSocket | null = null;
+
 export const useTradingStore = create<TradingState>((set, get) => ({
-    lastSequenceNumber: -1,
+    selectedSymbol: 'AAPL',
+    selectedTimeframe: '15m',
+    symbols: [],
+    market: 'USA',
 
-    systemHalted: false,
-    activeSignals: {},
-    portfolioState: {},
-    riskState: {},
+    candles: [],
+    indicators: null,
 
-    lastSnapshotUtc: null,
-    lastEventTimestampUtc: null,
-    engineClockHash: null,
+    portfolio: null,
 
-    hasReceivedSnapshot: false,
-    eventBuffer: [],
+    activeSignals: [],
+    tradeHistory: [],
+    recentOrders: [],
+    tradeStats: { total: 0, wins: 0, losses: 0, win_rate: 0, total_net_pnl: 0, avg_r: 0 },
 
-    clearSignals: () => {
-        set({ activeSignals: {} });
-        console.log('[Store] Signals cleared (chart switch)');
-    },
+    riskState: null,
+    systemStatus: null,
 
-    processSnapshot: (payload) => {
-        // Reconnection or initial load sync
-        set((state) => {
-            // Safety: Only accept snapshot if it's newer than our sequence stream,
-            // or if we have no sequence (initial load).
-            if (payload.snapshot_sequence_number < state.lastSequenceNumber && state.lastSequenceNumber !== -1) {
-                console.warn(`[Store] Ignored stale snapshot sequence ${payload.snapshot_sequence_number}`);
-                return state;
-            }
+    wsConnected: false,
+    lastUpdate: 0,
+    loading: true,
+    error: null,
 
-            const newSignals: Record<string, ActiveSignal> = {};
-            (payload.active_signals || []).forEach((sig: ActiveSignal) => {
-                newSignals[sig.signal_id] = Object.freeze(sig); // 6. Deep freeze
+    setMarket: async (market) => {
+        try {
+            const res = await fetch(`${API}/api/trading/market`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ market })
             });
-
-            console.log(`[Store] Hydrated from snapshot up to sequence ${payload.snapshot_sequence_number}`);
-
-            // Flush Event Buffer
-            const buffer = state.eventBuffer;
-            const validBufferedEvents = buffer.filter(e => e.event_sequence_number > payload.snapshot_sequence_number);
-
-            return {
-                lastSequenceNumber: payload.snapshot_sequence_number,
-                systemHalted: payload.system_halted || false,
-                activeSignals: newSignals,
-                portfolioState: payload.portfolio_state || {},
-                riskState: payload.risk_state || {},
-                lastSnapshotUtc: payload.timestamp_utc,
-                hasReceivedSnapshot: true,
-                eventBuffer: validBufferedEvents // Temporarily hold to flush outside set
-            };
-        });
-
-        // Recursively apply buffered events sequentially
-        const remaining = get().eventBuffer;
-
-        // Clear buffer before flushing to avoid loops
-        set({ eventBuffer: [] });
-
-        remaining.forEach(evt => {
-            get().processEvent(evt);
-        });
+            if (res.ok) {
+                const data = await res.json();
+                set({ market: data.market, symbols: data.symbols, selectedSymbol: data.symbols[0], candles: [], indicators: null });
+                setTimeout(() => {
+                    get().fetchAll();
+                    get().fetchCandles();
+                    get().fetchIndicators();
+                }, 0);
+            }
+        } catch (err) {
+            console.error("Failed to set market:", err);
+        }
     },
 
-    processEvent: (payload) => {
-        const state = get();
+    setSymbol: (symbol) => {
+        set({ selectedSymbol: symbol, candles: [], indicators: null });
+        // Re-fetch data for new symbol
+        setTimeout(() => {
+            get().fetchCandles();
+            get().fetchIndicators();
+        }, 0);
+    },
 
-        // 2. Snapshot Race Barrier
-        if (!state.hasReceivedSnapshot) {
-            set((draft) => ({ eventBuffer: [...draft.eventBuffer, payload] }));
-            console.log(`[Store] Buffered event ${payload.event_sequence_number} pending snapshot...`);
-            return;
+    setTimeframe: (tf) => {
+        set({ selectedTimeframe: tf, candles: [], indicators: null });
+        setTimeout(() => {
+            get().fetchCandles();
+            get().fetchIndicators();
+        }, 0);
+    },
+
+    fetchCandles: async () => {
+        const { selectedSymbol, selectedTimeframe } = get();
+        try {
+            const res = await fetch(`${API}/api/trading/candles?symbol=${selectedSymbol}&timeframe=${selectedTimeframe}&limit=200`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ candles: data.candles || [] });
+            }
+        } catch (e) {
+            console.error('Failed to fetch candles:', e);
         }
+    },
 
-        // ── Idempotency & Sequencing Check ──
-        const seq = payload.event_sequence_number;
-
-        if (seq !== undefined) {
-            if (seq <= state.lastSequenceNumber) {
-                console.debug(`[Store] Ignored duplicate/stale event sequence: ${seq}`);
-                return;
+    fetchIndicators: async () => {
+        const { selectedSymbol, selectedTimeframe } = get();
+        try {
+            const res = await fetch(`${API}/api/trading/indicators?symbol=${selectedSymbol}&timeframe=${selectedTimeframe}`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ indicators: data.indicators || null });
             }
-
-            if (seq > state.lastSequenceNumber + 1 && state.lastSequenceNumber !== -1) {
-                console.warn(`[Store] Sequence gap detected! Expected ${state.lastSequenceNumber + 1}, got ${seq}. Reconnection may be necessary.`);
-                // Note: A robust implementation might trigger a WS reconnect here to grab a fresh snapshot.
-            }
+        } catch (e) {
+            console.error('Failed to fetch indicators:', e);
         }
+    },
 
-        // ── Apply Event Mutation ──
-        set((draft) => {
-            const updates: Partial<TradingState> = {
-                lastSequenceNumber: seq !== undefined ? seq : draft.lastSequenceNumber,
-                lastEventTimestampUtc: payload.signal_timestamp_utc || draft.lastEventTimestampUtc,
-                engineClockHash: payload.engine_clock_hash || draft.engineClockHash,
-            };
+    fetchAll: async () => {
+        set({ loading: true, error: null });
+        try {
+            const [portfolioRes, signalsRes, riskRes, symbolsRes, systemRes] = await Promise.allSettled([
+                fetch(`${API}/api/trading/portfolio`),
+                fetch(`${API}/api/trading/signals`),
+                fetch(`${API}/api/trading/risk`),
+                fetch(`${API}/api/trading/symbols`),
+                fetch(`${API}/api/trading/system`),
+            ]);
 
-            if (payload.event === 'SYSTEM_HALTED') {
-                updates.systemHalted = true;
+            if (portfolioRes.status === 'fulfilled' && portfolioRes.value.ok) {
+                const data = await portfolioRes.value.json();
+                set({ portfolio: data });
             }
-            else if (payload.event?.startsWith('SIGNAL_')) {
-                const sigData: ActiveSignal = payload.signal;
-                if (sigData && sigData.signal_id) {
-                    const currentSig = draft.activeSignals[sigData.signal_id];
 
-                    // Version idempotency (defensive)
-                    if (currentSig && currentSig.signal_id === sigData.signal_id && sigData.version_number <= currentSig.version_number) {
-                        console.debug(`[Store] Ignored stale signal version: ${sigData.version_number}`);
-                        return draft; // Abort set entirely if version is stale
+            if (signalsRes.status === 'fulfilled' && signalsRes.value.ok) {
+                const data = await signalsRes.value.json();
+                set({
+                    activeSignals: data.active || [],
+                    tradeHistory: data.history || [],
+                    recentOrders: data.recentOrders || [],
+                    tradeStats: data.stats || get().tradeStats,
+                });
+            }
+
+            if (riskRes.status === 'fulfilled' && riskRes.value.ok) {
+                const data = await riskRes.value.json();
+                set({ riskState: data });
+            }
+
+            if (symbolsRes.status === 'fulfilled' && symbolsRes.value.ok) {
+                const data = await symbolsRes.value.json();
+                if (data.symbols?.length > 0) {
+                    set({ symbols: data.symbols });
+                    // Set default symbol if current one isn't in the list
+                    if (!data.symbols.includes(get().selectedSymbol)) {
+                        set({ selectedSymbol: data.symbols[0] });
                     }
-
-                    const newActiveSignals = { ...draft.activeSignals };
-
-                    if (sigData.is_terminal) {
-                        // Remove from active tracking once terminal (target/stop hit)
-                        delete newActiveSignals[sigData.signal_id];
-                    } else {
-                        // Upsert ACTIVE/LOCKED signal (frozen)
-                        newActiveSignals[sigData.signal_id] = Object.freeze(sigData);
-                    }
-
-                    updates.activeSignals = newActiveSignals;
                 }
             }
 
-            return updates;
-        });
-    }
+            if (systemRes.status === 'fulfilled' && systemRes.value.ok) {
+                const data = await systemRes.value.json();
+                set({ systemStatus: data });
+            }
+
+            set({ loading: false, lastUpdate: Date.now() });
+
+            // Also fetch chart data
+            await get().fetchCandles();
+            await get().fetchIndicators();
+
+        } catch (e: any) {
+            set({ loading: false, error: e.message || 'Failed to connect to backend' });
+        }
+    },
+
+    connectWebSocket: () => {
+        if (wsInstance) return;
+
+        const ws = new WebSocket(`${WS_API}/api/trading/ws`);
+        wsInstance = ws;
+
+        ws.onopen = () => {
+            set({ wsConnected: true, error: null });
+            // Initial data fetch
+            get().fetchAll();
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'HEARTBEAT' && data.data) {
+                    set({
+                        portfolio: data.data.portfolio,
+                        activeSignals: data.data.activeSignals || [],
+                        tradeHistory: data.data.tradeHistory || [],
+                        recentOrders: data.data.recentOrders || [],
+                        systemStatus: data.data.system,
+                        riskState: data.data.risk,
+                        lastUpdate: Date.now(),
+                    });
+                }
+            } catch (e) {
+                console.error('Failed to parse WebSocket message', e);
+            }
+        };
+
+        ws.onclose = () => {
+            wsInstance = null;
+            set({ wsConnected: false });
+            // Reconnect attempt
+            setTimeout(() => {
+                get().connectWebSocket();
+            }, 5000);
+        };
+
+        ws.onerror = () => {
+            set({ error: 'WebSocket connection error' });
+            ws.close();
+        };
+    },
+
+    disconnectWebSocket: () => {
+        if (wsInstance) {
+            wsInstance.onclose = null; // Prevent auto-reconnect
+            wsInstance.close();
+            wsInstance = null;
+            set({ wsConnected: false });
+        }
+    },
 }));

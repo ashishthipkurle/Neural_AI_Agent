@@ -32,9 +32,21 @@ const TradingChat: React.FC<TradingChatProps> = ({ apiBase = 'http://localhost:8
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const chatContainerRef = useRef<HTMLDivElement>(null);
+    const [userScrolledUp, setUserScrolledUp] = useState(false);
+
+    const handleScroll = () => {
+        if (chatContainerRef.current) {
+            const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+            const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
+            setUserScrolledUp(!isNearBottom);
+        }
+    };
 
     const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (!userScrolledUp) {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
     };
 
     useEffect(() => {
@@ -92,43 +104,20 @@ const TradingChat: React.FC<TradingChatProps> = ({ apiBase = 'http://localhost:8
     const quickQueries = ['What\'s the bias?', 'Risk mode?', 'Confidence?', 'Summary'];
 
     return (
-        <div
-            style={{
-                background: 'rgba(15, 20, 30, 0.95)',
-                border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: '12px',
-                display: 'flex',
-                flexDirection: 'column',
-                height: '400px',
-                overflow: 'hidden',
-            }}
-        >
+        <div className="flex-1 flex flex-col bg-[#0a0a0a] border border-[#222] rounded-lg overflow-hidden">
             {/* Header */}
-            <div
-                style={{
-                    padding: '12px 14px',
-                    borderBottom: '1px solid rgba(255,255,255,0.06)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                }}
-            >
-                <Sparkles size={14} color="#7C4DFF" />
-                <span style={{ color: '#B0BEC5', fontSize: '12px', fontWeight: 600, letterSpacing: '0.5px' }}>
+            <div className="p-3 border-b border-[#222] flex items-center gap-2">
+                <Sparkles size={14} className="text-emerald-400" />
+                <span className="text-gray-400 text-xs font-bold tracking-wider">
                     TRADING COPILOT
                 </span>
             </div>
 
             {/* Messages */}
-            <div
-                style={{
-                    flex: 1,
-                    overflowY: 'auto',
-                    padding: '10px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '8px',
-                }}
+            <div 
+                ref={chatContainerRef}
+                onScroll={handleScroll}
+                className="flex-1 overflow-y-auto custom-scrollbar p-3 flex flex-col gap-3"
             >
                 <AnimatePresence>
                     {messages.map((msg) => (
@@ -137,48 +126,17 @@ const TradingChat: React.FC<TradingChatProps> = ({ apiBase = 'http://localhost:8
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ duration: 0.2 }}
-                            style={{
-                                display: 'flex',
-                                gap: '8px',
-                                alignItems: 'flex-start',
-                                flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
-                            }}
+                            className={`flex gap-2 items-start ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
                         >
-                            <div
-                                style={{
-                                    width: '24px',
-                                    height: '24px',
-                                    borderRadius: '6px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    background: msg.role === 'user' ? 'rgba(33, 150, 243, 0.2)' : 'rgba(124, 77, 255, 0.2)',
-                                    flexShrink: 0,
-                                }}
-                            >
-                                {msg.role === 'user' ? (
-                                    <User size={12} color="#2196F3" />
-                                ) : (
-                                    <Bot size={12} color="#7C4DFF" />
-                                )}
+                            <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-[#222] text-gray-300'}`}>
+                                {msg.role === 'user' ? <User size={12} /> : <Bot size={12} />}
                             </div>
-                            <div
-                                style={{
-                                    background: msg.role === 'user' ? 'rgba(33, 150, 243, 0.1)' : 'rgba(255,255,255,0.04)',
-                                    border: `1px solid ${msg.role === 'user' ? 'rgba(33, 150, 243, 0.2)' : 'rgba(255,255,255,0.06)'}`,
-                                    borderRadius: '10px',
-                                    padding: '8px 12px',
-                                    maxWidth: '85%',
-                                    fontSize: '12px',
-                                    color: '#CFD8DC',
-                                    lineHeight: 1.5,
-                                    whiteSpace: 'pre-wrap',
-                                    fontFamily: 'monospace',
-                                }}
-                            >
+                            <div className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed font-mono whitespace-pre-wrap border ${
+                                msg.role === 'user' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-50' : 'bg-[#1a1a1a] border-[#333] text-gray-300'
+                            }`}>
                                 {msg.content}
                                 {msg.source && msg.role === 'assistant' && (
-                                    <div style={{ marginTop: '4px', fontSize: '9px', color: '#546E7A' }}>
+                                    <div className="mt-1 text-[9px] text-gray-500">
                                         source: {msg.source}
                                     </div>
                                 )}
@@ -187,16 +145,16 @@ const TradingChat: React.FC<TradingChatProps> = ({ apiBase = 'http://localhost:8
                     ))}
                 </AnimatePresence>
                 {loading && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px' }}>
-                        <Loader2 size={12} color="#7C4DFF" className="animate-spin" />
-                        <span style={{ fontSize: '11px', color: '#546E7A' }}>Analyzing engine state...</span>
+                    <div className="flex items-center gap-2 px-2 py-1">
+                        <Loader2 size={12} className="text-emerald-400 animate-spin" />
+                        <span className="text-[11px] text-gray-500">Analyzing engine state...</span>
                     </div>
                 )}
                 <div ref={messagesEndRef} />
             </div>
 
             {/* Quick Queries */}
-            <div style={{ padding: '6px 10px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <div className="px-3 py-1.5 flex gap-1.5 flex-wrap">
                 {quickQueries.map((q) => (
                     <button
                         key={q}
@@ -204,22 +162,7 @@ const TradingChat: React.FC<TradingChatProps> = ({ apiBase = 'http://localhost:8
                             setInput(q);
                             setTimeout(() => handleSend(), 50);
                         }}
-                        style={{
-                            padding: '3px 10px',
-                            borderRadius: '12px',
-                            border: '1px solid rgba(124, 77, 255, 0.3)',
-                            background: 'rgba(124, 77, 255, 0.08)',
-                            color: '#B388FF',
-                            fontSize: '10px',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s',
-                        }}
-                        onMouseEnter={(e) => {
-                            (e.target as HTMLButtonElement).style.background = 'rgba(124, 77, 255, 0.2)';
-                        }}
-                        onMouseLeave={(e) => {
-                            (e.target as HTMLButtonElement).style.background = 'rgba(124, 77, 255, 0.08)';
-                        }}
+                        className="px-2.5 py-1 rounded-md border border-[#333] bg-[#111] hover:bg-[#222] hover:border-[#444] text-gray-400 text-[10px] transition-colors cursor-pointer"
                     >
                         {q}
                     </button>
@@ -227,50 +170,28 @@ const TradingChat: React.FC<TradingChatProps> = ({ apiBase = 'http://localhost:8
             </div>
 
             {/* Input */}
-            <div
-                style={{
-                    padding: '10px',
-                    borderTop: '1px solid rgba(255,255,255,0.06)',
-                    display: 'flex',
-                    gap: '8px',
-                }}
-            >
-                <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                    placeholder="Ask about bias, confidence, regime..."
-                    style={{
-                        flex: 1,
-                        background: 'rgba(255,255,255,0.04)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        borderRadius: '8px',
-                        padding: '8px 12px',
-                        color: '#CFD8DC',
-                        fontSize: '12px',
-                        outline: 'none',
-                        fontFamily: 'monospace',
-                    }}
-                />
-                <button
-                    onClick={handleSend}
-                    disabled={loading || !input.trim()}
-                    style={{
-                        width: '36px',
-                        height: '36px',
-                        borderRadius: '8px',
-                        border: 'none',
-                        background: loading ? 'rgba(124, 77, 255, 0.2)' : 'rgba(124, 77, 255, 0.4)',
-                        color: '#B388FF',
-                        cursor: loading ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                    }}
-                >
-                    <Send size={14} />
-                </button>
+            <div className="p-3 border-t border-[#222] bg-[#0a0a0a]">
+                <div className="relative flex items-center">
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                        placeholder="Command the AI..."
+                        className="w-full bg-[#1a1a1a] border border-[#444] rounded-lg pl-3 pr-10 py-2.5 text-xs text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50 transition-all shadow-inner font-mono"
+                    />
+                    <button
+                        onClick={handleSend}
+                        disabled={loading || !input.trim()}
+                        className={`absolute right-1 w-8 h-8 rounded-md flex items-center justify-center transition-colors ${
+                            loading || !input.trim() 
+                                ? 'text-gray-500 bg-transparent cursor-not-allowed' 
+                                : 'text-emerald-400 hover:text-white hover:bg-emerald-500/20 cursor-pointer'
+                        }`}
+                    >
+                        <Send size={14} />
+                    </button>
+                </div>
             </div>
         </div>
     );

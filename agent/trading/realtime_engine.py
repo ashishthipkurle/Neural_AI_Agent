@@ -25,6 +25,7 @@ from .cluster_coordinator import ClusterCoordinator
 from .audit_logger import AuditLogger
 from .observability_stack import ObservabilityStack
 from .lifecycle_engine import LifecycleEngine
+from .trading_chat_agent import TradingChatAgent
 
 
 class RealtimeEngine:
@@ -50,6 +51,7 @@ class RealtimeEngine:
         
         self.audit_logger = AuditLogger()
         self.observability = ObservabilityStack()
+        self.chat = TradingChatAgent()
         
         self.websocket_hub = websocket_hub
 

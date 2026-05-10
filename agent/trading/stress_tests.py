@@ -145,11 +145,11 @@ def test_hmm_convergence_failure():
     switcher = RegimeSwitcher()
     
     # Normal inputs
-    mode1 = switcher.detect_regime(0.2, 0.2, 1)
+    mode1 = switcher.detect_regime([100.0] * 50, [90.0] * 50, [95.0] * 50)
     
     # Convergence failure (NaNs, extreme values, division by zero upstream yielding inf)
     try:
-        mode2 = switcher.detect_regime(float('nan'), float('inf'), 0)
+        mode2 = switcher.detect_regime([float('nan')] * 50, [float('inf')] * 50, [0.0] * 50)
         logger.info(f"Regime on convergence failure/extreme input: {mode2}")
     except Exception as e:
         logger.error(f"Failed to handle extreme inputs: {e}")

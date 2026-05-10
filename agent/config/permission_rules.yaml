@@ -1,0 +1,21 @@
+mode: workspace_write
+blocked_tools: []
+rules:
+  - tool_name: "read_file"
+    decision: allow
+  - tool_name: "write_file"
+    decision: ask
+  - tool_name: "delete_path"
+    decision: ask
+  - tool_name: "execute_code"
+    decision: ask
+  - tool_name: "launch_app"
+    decision: ask
+  - tool_prefix: "system_power"
+    decision: deny
+tool_requirements:
+  read_file: { minimum_mode: read_only }
+  write_file: { minimum_mode: workspace_write }
+  delete_path: { minimum_mode: danger_full_access, always_ask: true }
+  execute_code: { minimum_mode: workspace_write, always_ask: true }
+  launch_app: { minimum_mode: workspace_write }

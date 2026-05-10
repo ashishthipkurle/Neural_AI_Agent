@@ -253,6 +253,33 @@ class IndicatorsEngine:
 
         return middle + std * num_std, middle, middle - std * num_std
 
+    @staticmethod
+    def calculate_bollinger_bands_series(
+        prices: List[float], period: int = 20, num_std: float = 2.0
+    ) -> Tuple[List[float], List[float], List[float]]:
+        """Bollinger Bands Series. Returns full arrays for (upper, middle, lower)."""
+        upper, middle, lower = [], [], []
+        if len(prices) < period or period <= 0:
+            return upper, middle, lower
+
+        for i in range(len(prices)):
+            if i < period - 1:
+                upper.append(0.0)
+                middle.append(0.0)
+                lower.append(0.0)
+                continue
+            
+            recent = prices[i - period + 1 : i + 1]
+            mid = sum(recent) / period
+            variance = sum((p - mid) ** 2 for p in recent) / period
+            std = math.sqrt(variance)
+            
+            upper.append(mid + std * num_std)
+            middle.append(mid)
+            lower.append(mid - std * num_std)
+
+        return upper, middle, lower
+
     # ─── Volume Indicators ─────────────────────────────────────────
 
     @staticmethod

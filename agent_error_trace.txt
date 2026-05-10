@@ -1,0 +1,100 @@
+2026-04-04 12:47:06 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:47:11 - graph.nodes.coder - INFO - Coder round 1: executed 1 tool(s)
+2026-04-04 12:47:13 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:47:15 - graph.nodes.coder - INFO - [Bash] Auto-approving prefix 'where'
+2026-04-04 12:47:16 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:47:26 - graph.nodes.coder - INFO - Coder round 2: executed 1 tool(s)
+2026-04-04 12:47:26 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:47:28 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:47:31 - graph.nodes.coder - INFO - [Bash] Auto-approving prefix 'Get-Command'
+2026-04-04 12:47:37 - graph.nodes.coder - INFO - Coder round 3: executed 1 tool(s)
+2026-04-04 12:47:37 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:47:38 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:47:42 - graph.nodes.coder - INFO - [Bash] Auto-approving prefix 'Test-Path'
+2026-04-04 12:47:43 - graph.nodes.coder - INFO - Coder round 4: executed 1 tool(s)
+2026-04-04 12:47:47 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:47:48 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:47:50 - graph.nodes.coder - INFO - [Bash] Auto-approving prefix 'Start-Process'
+2026-04-04 12:47:50 - graph.nodes.coder - INFO - Coder round 5: executed 1 tool(s)
+2026-04-04 12:47:59 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:48:09 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:48:13 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:48:13 - graph.nodes.coder - INFO - Coder round 6: executed 1 tool(s)
+2026-04-04 12:48:14 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:48:17 - graph.runtime - INFO - 🟢 Graph node completed: coder
+2026-04-04 12:48:17 - graph.nodes.verifier - INFO - No verification checks applicable. Passing through.
+2026-04-04 12:48:17 - graph.runtime - INFO - 🟢 Graph node completed: verifier
+2026-04-04 12:48:17 - graph.supervisor - INFO - Supervisor → completion (task finished)
+2026-04-04 12:48:17 - graph.runtime - INFO - 🟢 Graph node completed: supervisor
+2026-04-04 12:48:17 - graph.completion - INFO - Audit log saved: agent_data\audit_logs\audit_20260404_071817.json
+2026-04-04 12:48:17 - graph.runtime - INFO - 🟢 Graph node completed: completion
+2026-04-04 12:48:17 - graph.runtime - INFO - Graph completed: 148 chars
+2026-04-04 12:48:17 - VoiceManager - INFO - Voice system unlocked (IDLE).
+2026-04-04 12:48:17 - AgentAPI - INFO - 📤 Response: I've successfully opened Chrome and searched for cars. The task is complete. Chrome should now be op...
+2026-04-04 12:48:19 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:48:24 - WakeWordEngine - INFO - VOSK HEARD: 'what on earth'
+2026-04-04 12:48:25 - WakeWordEngine - INFO - VOSK HEARD: 'well that's all'
+2026-04-04 12:48:27 - WakeWordEngine - INFO - VOSK HEARD: 'the always'
+2026-04-04 12:48:30 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:48:32 - WakeWordEngine - INFO - VOSK HEARD: 'just candidate will start at about'
+2026-04-04 12:48:38 - WakeWordEngine - INFO - VOSK HEARD: 'right on that so'
+2026-04-04 12:48:40 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:48:40 - WakeWordEngine - INFO - VOSK HEARD: 'what to say'
+2026-04-04 12:48:44 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:48:44 - WakeWordEngine - INFO - VOSK HEARD: 'levin said was enjoyable'
+2026-04-04 12:48:45 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/sendChatAction "HTTP/1.1 200 OK"
+2026-04-04 12:48:45 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/sendMessage "HTTP/1.1 200 OK"
+2026-04-04 12:48:45 - HistoryManager - INFO - Generating title for message: do a deep research on import export and send it to...
+2026-04-04 12:48:46 - WakeWordEngine - INFO - VOSK HEARD: 'yeah'
+2026-04-04 12:48:48 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 500 Internal Server Error"
+2026-04-04 12:48:48 - HistoryManager - WARNING - LLM title generation returned status 500
+2026-04-04 12:48:48 - HistoryManager - INFO - Fallback title: Do Deep Research On
+2026-04-04 12:48:48 - StateMachine - WARNING - Invalid transition: thinking -> listening
+2026-04-04 12:48:48 - StateMachine - WARNING - Invalid transition: thinking -> thinking
+2026-04-04 12:48:48 - VoiceManager - INFO - Voice system locked (BUSY).
+2026-04-04 12:48:48 - NeuralAgent - INFO - LangGraph processing: do a deep research on import export and send it to me on telegram
+2026-04-04 12:48:48 - graph.runtime - INFO - Graph processing: do a deep research on import export and send it to me on telegram...
+2026-04-04 12:48:48 - graph.supervisor - INFO - Supervisor → planner (default routing: do a deep research on import export and send it to me on telegram)
+2026-04-04 12:48:48 - graph.runtime - INFO - 🟢 Graph node completed: supervisor
+2026-04-04 12:48:48 - graph.nodes.planner - INFO - Planner node: scanning project and creating plan...
+2026-04-04 12:48:48 - LLMProvider - INFO - Creating ChatOllama: model=qwen3-coder:480b-cloud  url=http://localhost:11434
+2026-04-04 12:48:53 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:48:56 - graph.nodes.planner - INFO - Planner round 1: executed 1 tool(s)
+2026-04-04 12:48:58 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:00 - graph.nodes.planner - INFO - Planner round 2: executed 1 tool(s)
+2026-04-04 12:49:01 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:02 - graph.nodes.planner - INFO - Planner round 3: executed 1 tool(s)
+2026-04-04 12:49:03 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:05 - graph.nodes.planner - INFO - Planner round 4: executed 1 tool(s)
+2026-04-04 12:49:07 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:09 - graph.nodes.planner - INFO - Planner round 5: executed 1 tool(s)
+2026-04-04 12:49:09 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:10 - graph.nodes.planner - INFO - Planner round 6: executed 1 tool(s)
+2026-04-04 12:49:11 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:12 - graph.nodes.planner - INFO - Planner round 7: executed 1 tool(s)
+2026-04-04 12:49:13 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:14 - graph.nodes.planner - INFO - Planner round 8: executed 1 tool(s)
+2026-04-04 12:49:15 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:19 - graph.nodes.planner - INFO - Planner round 9: executed 1 tool(s)
+2026-04-04 12:49:20 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:21 - graph.nodes.planner - INFO - Planner round 10: executed 1 tool(s)
+2026-04-04 12:49:22 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:26 - graph.nodes.planner - INFO - Planner round 11: executed 1 tool(s)
+2026-04-04 12:49:28 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:28 - graph.nodes.planner - INFO - Planner round 12: executed 1 tool(s)
+2026-04-04 12:49:30 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:33 - graph.nodes.planner - INFO - Planner round 13: executed 1 tool(s)
+2026-04-04 12:49:41 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:49:52 - graph.nodes.planner - INFO - Planner round 14: executed 1 tool(s)
+2026-04-04 12:49:54 - httpx - INFO - HTTP Request: POST http://localhost:11434/api/chat "HTTP/1.1 200 OK"
+2026-04-04 12:50:18 - graph.nodes.planner - INFO - Planner round 15: executed 1 tool(s)
+2026-04-04 12:50:18 - graph.nodes.planner - INFO - Planner completed. Plan length: 94 chars
+2026-04-04 12:50:18 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8205025100:AAETjiqViw-Pv7wiloRG7wbeu736EgYnLQM/getUpdates "HTTP/1.1 200 OK"
+2026-04-04 12:50:18 - graph.runtime - INFO - 🟢 Graph node completed: planner
+2026-04-04 12:50:18 - graph.supervisor - INFO - Supervisor → completion (plan awaiting approval, returning to UI)
+2026-04-04 12:50:18 - graph.runtime - INFO - 🟢 Graph node completed: supervisor
+2026-04-04 12:50:18 - graph.completion - INFO - Audit log saved: agent_data\audit_logs\audit_20260404_072018.json
+2026-04-04 12:50:18 - graph.runtime - INFO - 🟢 Graph node completed: completion
+2026-04-04 12:50:18 - graph.runtime - INFO - Graph paused: plan awaiting approval (94 chars)
+2026-04-04 12:50:18 - VoiceManager - INFO - Voice system unlocked (IDLE).
+2026-04-04 12:50:18 - Skill.telegram - ERROR - Agent processing failed: 'dict' object has no attribute 'lower'

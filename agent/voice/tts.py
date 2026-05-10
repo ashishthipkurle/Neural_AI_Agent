@@ -164,6 +164,20 @@ class TextToSpeech:
 
         self.logger.info(f"🗣 Speaking ({emotion}): {text[:60]}")
 
+        # Clean text for TTS (remove emojis, markdown, etc.)
+        import re
+        # Remove markdown symbols
+        clean_text = re.sub(r'[*_#~`\[\]]', '', text)
+        # Remove emojis (basic unicode range for emojis)
+        clean_text = re.sub(r'[^\w\s.,!?\'"-]', ' ', clean_text)
+        # Fix multiple spaces
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        # Remove space before punctuation (which can cause TTS to read the punctuation's name)
+        clean_text = re.sub(r'\s+([.,!?])', r'\1', clean_text)
+
+        if not clean_text:
+            return
+
         # 1. Get Emotion Settings
         settings = None
         if EMOTION_PROFILES and Emotion:
@@ -174,9 +188,9 @@ class TextToSpeech:
                 pass
         
         # 2. Prosody Processing
-        processed_text = text
+        processed_text = clean_text
         if self.prosody:
-            processed_text = self.prosody.process(text, settings)
+            processed_text = self.prosody.process(clean_text, settings)
         
         # 3. Try Engines in priority order
         

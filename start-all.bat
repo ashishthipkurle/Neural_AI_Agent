@@ -10,7 +10,7 @@ echo [1/3] Checking Ollama LLM server...
 tasklist /FI "IMAGENAME eq ollama.exe" 2>NUL | find /I "ollama.exe" >NUL
 if errorlevel 1 (
     echo Starting Ollama...
-    start "" ollama serve
+    start "" "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" serve
     timeout /t 3 /nobreak > nul
 ) else (
     echo Ollama already running.

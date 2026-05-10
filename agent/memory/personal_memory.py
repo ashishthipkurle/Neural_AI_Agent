@@ -122,6 +122,19 @@ class PersonalMemoryManager:
             self.logger.error(f"Failed to initialize Personal Memory DB: {e}")
             raise
 
+    def ensure_user_profile(self, name: str, notes: str = None):
+        """Create user profile if it doesn't exist."""
+        try:
+            with self._get_connection() as conn:
+                existing = conn.execute("SELECT id FROM user_profile LIMIT 1").fetchone()
+                if not existing:
+                    conn.execute(
+                        "INSERT INTO user_profile (id, name, personality_notes) VALUES (1, ?, ?)",
+                        (name, notes)
+                    )
+        except Exception as e:
+            self.logger.error(f"Failed to ensure user profile: {e}")
+
     def record_action(self, action_type: str, description: str, 
                       method: str = None, reasoning: str = None,
                       context: str = None, outcome: str = None,

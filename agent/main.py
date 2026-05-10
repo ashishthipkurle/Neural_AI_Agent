@@ -136,6 +136,13 @@ class NeuralAgent:
             from agent.security.destructive_action_handler import DestructiveActionHandler
             from agent.security.assumption_log import AssumptionLogger
             
+            # Module 1: Personal Memory
+            from agent.memory.personal_memory import PersonalMemoryManager
+            self.personal_memory = PersonalMemoryManager()
+            # Seed profile if needed
+            if hasattr(self.personal_memory, 'ensure_user_profile'):
+                self.personal_memory.ensure_user_profile("Ashish", "Prefers concise, capable assistance.")
+
             # Module 12: Safety Framework
             from agent.core.safety_framework import SafetyFramework
             self.safety_framework = SafetyFramework(self.config, self.personal_memory)
@@ -1172,6 +1179,20 @@ Do NOT say "according to the search results" - just answer directly."""
         """Generate LLM response for chat."""
         if self._llm_runtime and self._llm_runtime.is_available():
             system_prompt = self.config.get('system_prompt', "You are a helpful AI assistant.")
+            
+            # Inject personal memory context
+            if hasattr(self, 'personal_memory') and self.personal_memory:
+                user_context = self.personal_memory.get_user_context(current_task=user_input)
+                system_prompt = system_prompt.replace("{user_context}", user_context)
+            else:
+                system_prompt = system_prompt.replace("{user_context}", "")
+
+            # Inject time context
+            import datetime
+            now = datetime.datetime.now()
+            hour = now.hour
+            time_context = "morning" if 5 <= hour < 12 else "afternoon" if 12 <= hour < 17 else "evening" if 17 <= hour < 21 else "night"
+            system_prompt += f"\n\nCurrent time: {now.strftime('%I:%M %p')} ({time_context})"
             
             # Inject Performance Stats into System Prompt (so LLM knows its speed)
             if hasattr(self._llm_runtime, 'last_tps') and self._llm_runtime.last_tps > 0:

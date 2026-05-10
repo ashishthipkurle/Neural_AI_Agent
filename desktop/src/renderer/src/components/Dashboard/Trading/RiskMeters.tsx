@@ -53,7 +53,7 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
     const rMultiplier = props.rMultiplier ?? d.rMultiplier ?? d.r_multiplier ?? 1.0;
     const signalsAllowed = props.signalsAllowed ?? d.signalsAllowed ?? d.signals_allowed ?? true;
     const haltedReason = props.haltedReason || d.haltedReason || d.halted_reason || null;
-    const currentDrawdown = props.currentDrawdown ?? d.currentDrawdown ?? d.current_drawdown ?? parseFloat(String(d.drawdown || '0')) / 100 ?? 0;
+    const currentDrawdown = props.currentDrawdown ?? d.currentDrawdown ?? d.current_drawdown ?? (parseFloat(String(d.drawdown || '0')) / 100 || 0);
     const maxDrawdown = props.maxDrawdown ?? d.maxDrawdown ?? d.max_drawdown ?? 0.20;
     const exposurePct = props.exposurePct ?? d.exposurePct ?? d.exposure_pct ?? 0;
     const confidenceAvg = props.confidenceAvg ?? d.confidenceAvg ?? d.confidence_avg ?? 0.5;
@@ -107,9 +107,9 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
     return (
         <div
             style={{
-                background: 'rgba(15, 20, 30, 0.95)',
-                border: `1px solid ${config.color}22`,
-                borderRadius: '12px',
+                background: '#0a0a0a',
+                border: `1px solid #222`,
+                borderRadius: '8px',
                 padding: '14px',
                 marginBottom: '10px',
             }}

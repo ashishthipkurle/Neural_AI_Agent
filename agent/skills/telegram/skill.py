@@ -51,6 +51,16 @@ class TelegramSkill(BaseSkill):
         # Keyed by chat_id (string).
         self._sent_document_counter: Dict[str, int] = {}
         
+        # Autonomous Trading Integration
+        self.trading_loop = None
+        if os.environ.get("TRADING_ENABLED", "false").lower() == "true":
+            try:
+                from agent.trading.autonomous_loop import AutonomousTradingLoop
+                self.logger.info("Initializing Autonomous Trading Loop...")
+                self.trading_loop = AutonomousTradingLoop()
+            except Exception as e:
+                self.logger.error(f"Failed to load trading loop: {e}")
+        
         self._setup_bot()
 
     def _setup_bot(self):
@@ -100,6 +110,11 @@ class TelegramSkill(BaseSkill):
                 self._polling_started = True
                 self._ensure_polling_monitor()
                 self.logger.info("Telegram polling started.")
+                
+                if self.trading_loop:
+                    self.logger.info("Starting Autonomous Trading Loop...")
+                    self.trading_loop.start()
+                    
             except Exception as e:
                 self.logger.error(f"Failed to start polling: {e}")
                 import traceback
@@ -107,6 +122,9 @@ class TelegramSkill(BaseSkill):
         elif self.application and self._polling_started:
             # Polling was started previously; ensure monitor exists.
             self._ensure_polling_monitor()
+            
+            if self.trading_loop:
+                self.trading_loop.start()
 
     def _ensure_polling_monitor(self) -> None:
         if self._polling_monitor_task and not self._polling_monitor_task.done():
@@ -192,11 +210,19 @@ class TelegramSkill(BaseSkill):
         )
 
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle generic commands (e.g. /task, /open)."""
+        """Handle incoming commands like /task, /open, etc."""
         if not update.message or not update.message.text:
             return
             
         text = update.message.text
+        
+        # Intercept trading commands
+        if self.trading_loop and self.trading_loop.telegram.is_trading_command(text):
+            response = self.trading_loop.telegram.handle_trading_command(text)
+            if response:
+                await update.message.reply_text(response)
+            return
+
         # Strip leading slash to support fast command routing (e.g. "/open" -> "open")
         if text.startswith('/'):
             text = text[1:]
