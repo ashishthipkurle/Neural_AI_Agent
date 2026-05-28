@@ -23,7 +23,7 @@ class VoiceInterface:
         
         # Initialize Subsystems
         # Get wake words from config or default
-        wake_words = self.config.get("voice_settings", {}).get("wake_words", ["hey jarvis", "hi bro"])
+        wake_words = self.config.get("voice_settings", {}).get("wake_words", ["hey indra", "hi bro"])
         self.wake_engine = WakeWordEngine(model_path=vosk_model_path, wake_words=wake_words)
         self.stt_engine = SpeechToText(model_path=vosk_model_path)
         self.tts_engine = TextToSpeech(model_path=piper_model_path)

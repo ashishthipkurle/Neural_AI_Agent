@@ -1,0 +1,31 @@
+# INDRA Dependencies
+
+# ── Core & Memory ──
+chromadb==0.5.0
+tiktoken
+
+# ── Voice & Audio ──
+langdetect
+kokoro
+soundfile
+gTTS
+pygame
+pyaudio
+webrtcvad
+faster-whisper
+openwakeword
+
+# ── Vision & Screen ──
+mss
+Pillow
+opencv-python
+numpy
+
+# ── Computer Control ──
+pywinauto
+PyAutoGUI
+playwright
+keyboard
+
+# ── AI Models ──
+ollama

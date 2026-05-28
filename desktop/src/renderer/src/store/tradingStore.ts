@@ -97,6 +97,18 @@ export interface IndicatorData {
     macd: { line: number[]; signal: number[]; histogram: number[] };
     atr: number[];
     bollinger: { upper: number[]; middle: number[]; lower: number[] };
+    ml_prediction?: {
+        direction: 'UP' | 'DOWN';
+        confidence: number;
+        magnitude: number;
+        entry_price: number;
+        stop_price: number;
+        target_price: number;
+        model_accuracy: number;
+        top_features: { name: string; importance: number }[];
+        lookforward: number;
+        trained_on: number;
+    } | null;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -148,6 +160,7 @@ const API = 'http://localhost:8000';
 const WS_API = 'ws://localhost:8000';
 
 let wsInstance: WebSocket | null = null;
+let candleIntervalId: ReturnType<typeof setInterval> | null = null;
 
 export const useTradingStore = create<TradingState>((set, get) => ({
     selectedSymbol: 'AAPL',
@@ -217,7 +230,32 @@ export const useTradingStore = create<TradingState>((set, get) => ({
             const res = await fetch(`${API}/api/trading/candles?symbol=${selectedSymbol}&timeframe=${selectedTimeframe}&limit=200`);
             if (res.ok) {
                 const data = await res.json();
-                set({ candles: data.candles || [] });
+                const newCandles = data.candles || [];
+                // Only update if data actually changed (prevents unnecessary re-renders)
+                const existing = get().candles;
+                let shouldUpdate = false;
+                
+                if (existing.length === 0 || newCandles.length === 0) {
+                    shouldUpdate = true;
+                } else if (existing.length !== newCandles.length) {
+                    shouldUpdate = true;
+                } else {
+                    const eLast = existing[existing.length - 1];
+                    const nLast = newCandles[newCandles.length - 1];
+                    if (
+                        eLast.time !== nLast.time ||
+                        eLast.close !== nLast.close ||
+                        eLast.high !== nLast.high ||
+                        eLast.low !== nLast.low ||
+                        eLast.volume !== nLast.volume
+                    ) {
+                        shouldUpdate = true;
+                    }
+                }
+
+                if (shouldUpdate) {
+                    set({ candles: newCandles });
+                }
             }
         } catch (e) {
             console.error('Failed to fetch candles:', e);
@@ -305,6 +343,13 @@ export const useTradingStore = create<TradingState>((set, get) => ({
             set({ wsConnected: true, error: null });
             // Initial data fetch
             get().fetchAll();
+
+            // ── LIVE CANDLE POLLING: Refresh chart data every 3 seconds ──
+            if (candleIntervalId) clearInterval(candleIntervalId);
+            candleIntervalId = setInterval(() => {
+                get().fetchCandles();
+                get().fetchIndicators();
+            }, 3_000); // 3 seconds for near-real-time updates
         };
 
         ws.onmessage = (event) => {
@@ -329,6 +374,8 @@ export const useTradingStore = create<TradingState>((set, get) => ({
         ws.onclose = () => {
             wsInstance = null;
             set({ wsConnected: false });
+            // Stop candle polling
+            if (candleIntervalId) { clearInterval(candleIntervalId); candleIntervalId = null; }
             // Reconnect attempt
             setTimeout(() => {
                 get().connectWebSocket();
@@ -342,6 +389,8 @@ export const useTradingStore = create<TradingState>((set, get) => ({
     },
 
     disconnectWebSocket: () => {
+        // Stop candle polling
+        if (candleIntervalId) { clearInterval(candleIntervalId); candleIntervalId = null; }
         if (wsInstance) {
             wsInstance.onclose = null; // Prevent auto-reconnect
             wsInstance.close();

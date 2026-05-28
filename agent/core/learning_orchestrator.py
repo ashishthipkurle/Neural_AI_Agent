@@ -89,8 +89,8 @@ class LearningOrchestrator:
         
         # 1. Pre-process (Intent Learning?)
         
-        # 2. Execute via Agent
-        response = await self.agent.process_input(user_input, image_data)
+        # 2. Execute via Agent — forward source so Telegram isolation works
+        response = await self.agent.process_input(user_input, source=source, image_data=image_data)
         
         # 3. Log Experience (High Level)
         # This is tricky because process_input might fire multiple skills

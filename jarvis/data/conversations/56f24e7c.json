@@ -1,0 +1,28 @@
+{
+  "id": "56f24e7c",
+  "title": "I have a friend with me, Krita.",
+  "created_at": 1779440145.510028,
+  "updated_at": 1779440263.8228884,
+  "messages": [
+    {
+      "role": "user",
+      "content": "I have a friend with me, Krita.",
+      "timestamp": 1779440145.511198
+    },
+    {
+      "role": "assistant",
+      "content": "I'm having trouble connecting to my language model.",
+      "timestamp": 1779440149.159947
+    },
+    {
+      "role": "user",
+      "content": "No, un poco que le da.",
+      "timestamp": 1779440261.4832704
+    },
+    {
+      "role": "assistant",
+      "content": "I'm having trouble connecting to my language model.",
+      "timestamp": 1779440263.822866
+    }
+  ]
+}

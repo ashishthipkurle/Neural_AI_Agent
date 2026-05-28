@@ -144,8 +144,8 @@ app.whenReady().then(() => {
         // optimizer.watchWindowShortcuts(window) // removed
     })
 
-    const menu = Menu.buildFromTemplate(createMenuTemplate())
-    Menu.setApplicationMenu(menu)
+    // const menu = Menu.buildFromTemplate(createMenuTemplate())
+    Menu.setApplicationMenu(null)
 
     // Start WebSocket terminal server
     terminalServer.start()

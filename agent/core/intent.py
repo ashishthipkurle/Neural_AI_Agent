@@ -230,6 +230,41 @@ class IntentParser:
              elif "stop" in u_lower or "close" in u_lower:
                   return [Intent(action="stop_surveillance", tool_name="stop_surveillance", parameters={})]
 
+        # NUCLEAR OPTION: Cybersecurity / PHANTOM Agent Mode
+        # Routes all hacking/security questions through the PHANTOM persona
+        _cyber_keywords = [
+            "hack", "exploit", "vulnerability", "pentest", "penetration test",
+            "payload", "shellcode", "backdoor", "rootkit", "trojan", "malware",
+            "ransomware", "rat ", "zero day", "0day", "zero-day",
+            "port scan", "nmap", "packet sniff", "man in the middle", "mitm",
+            "arp spoof", "metasploit", "msfconsole", "meterpreter",
+            "wifi hack", "wifi crack", "wpa", "aircrack", "deauth", "handshake",
+            "pmkid", "evil twin", "crack wifi", "hack wifi", "monitor mode",
+            "sql injection", "sqli", "xss", "cross site", "ssrf",
+            "rce", "remote code execution", "reverse shell", "bind shell",
+            "burp suite", "gobuster", "nuclei", "waf bypass",
+            "crack password", "hash crack", "hashcat", "john the ripper",
+            "brute force", "dictionary attack",
+            "privilege escalation", "privesc", "priv esc", "get root",
+            "mimikatz", "lsass", "kerberoast", "golden ticket", "pass the hash",
+            "bloodhound", "domain admin",
+            "phishing", "social engineer", "osint", "reconnaissance",
+            "cobalt strike", "sliver", "c2 server", "edr bypass", "amsi bypass",
+            "av evasion", "antivirus bypass",
+            "cybersecurity mode", "hacker mode", "pentest mode", "phantom mode",
+            "red team", "capture the flag", "ctf",
+            "reverse engineer", "malware analysis", "forensics",
+            "flipper zero", "rubber ducky", "scada",
+        ]
+        if any(k in u_lower for k in _cyber_keywords):
+            return [Intent(
+                action="cyber_chat",
+                tool_name="cyber_chat",
+                parameters={"query": user_input, "mode": "general"},
+                confidence=1.0,
+                reasoning="Cybersecurity/hacking intent detected — routing to PHANTOM agent."
+            )]
+
         # NUCLEAR OPTION: Chart/Market Analysis
         chart_keywords = ["chart", "stock", "predict", "prediction", "up or down", "go up", "go down", 
                           "bullish", "bearish", "candle", "candlestick", "forex", "trading", "analysis",

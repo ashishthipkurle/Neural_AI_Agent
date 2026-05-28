@@ -1,7 +1,7 @@
 {
     "name": "neural-ai-agent",
     "version": "1.0.0",
-    "description": "AI Agent Desktop Application - Local Jarvis-class AI",
+    "description": "AI Agent Desktop Application - Local INDRA-class AI",
     "main": "./out/main/index.js",
     "author": "Neural AI Team",
     "homepage": "https://electron-vite.org",

@@ -16,7 +16,7 @@ except ImportError:
 class WakeWordEngine:
     def __init__(self, model_path="voice_models/vosk-model-small-en-us-0.15", wake_words=None):
         self.logger = logging.getLogger("WakeWordEngine")
-        self.wake_words = wake_words or ["hey jarvis", "hey nova"]
+        self.wake_words = wake_words or ["hey indra", "hey nova"]
         self.q = queue.Queue()
         self.running = False
         self.model = None # Init to None to avoid AttributeError

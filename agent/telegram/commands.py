@@ -108,9 +108,33 @@ async def cmd_lessons(update, context): await update.message.reply_text("Lessons
 async def cmd_notify(update, context): await update.message.reply_text("Notifications toggled.")
 
 
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle plain text messages from Telegram and route them to the AI Agent."""
+    text = update.message.text
+    chat_id = update.message.chat_id
+    
+    orchestrator = context.bot_data.get('orchestrator')
+    if not orchestrator:
+        await update.message.reply_text("❌ Error: AI Agent not linked to Telegram.")
+        return
+        
+    # Send processing status
+    processing_msg = await update.message.reply_text("🤔 Thinking...")
+    
+    try:
+        # Route through the orchestrator with telegram source
+        source_id = f"telegram_{chat_id}"
+        response = await orchestrator.process_input(text, source=source_id)
+        
+        # Update the processing message with the actual response
+        await processing_msg.edit_text(response)
+    except Exception as e:
+        logger.error(f"Error processing telegram message: {e}", exc_info=True)
+        await processing_msg.edit_text(f"❌ Error processing your request: {str(e)}")
+
 def setup_commands(application, auth_instance):
     """Register all command handlers."""
-    from telegram.ext import CommandHandler
+    from telegram.ext import CommandHandler, MessageHandler, filters
     
     # Helper to apply auth
     def auth(handler_func):
@@ -141,3 +165,7 @@ def setup_commands(application, auth_instance):
     app.add_handler(CommandHandler("patterns", auth(cmd_patterns)))
     app.add_handler(CommandHandler("lessons", auth(cmd_lessons)))
     app.add_handler(CommandHandler("notify", auth(cmd_notify)))
+    
+    # Handle plain text messages (must be authorized)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auth(handle_text_message)))
+

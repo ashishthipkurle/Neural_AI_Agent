@@ -30,7 +30,7 @@ class AutonomousTradingLoop:
         "market": "USA", # "USA" or "IND"
         "symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ"],
         "usa_symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ"],
-        "ind_symbols": ["^NSEI", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS"],
+        "ind_symbols": ["NIFTY 50", "RELIANCE", "TCS", "HDFCBANK", "INFY", "SBIN"],
         "timeframes": ["15m"],
         "max_positions": 3,
         "max_risk_per_trade": 0.02,
@@ -64,6 +64,10 @@ class AutonomousTradingLoop:
         self.config["market"] = market
         self.config["symbols"] = self.config[f"{market.lower()}_symbols"]
         self.logger.info(f"Market switched to {market}. Tracking {len(self.config['symbols'])} symbols.")
+        
+        # Sync market context to data feed for proper routing
+        if hasattr(self, 'data_feed'):
+            self.data_feed.set_active_market(market)
         
         # Trigger an immediate background backfill for the new symbols so the UI loads quickly
         if hasattr(self, 'data_feed'):
@@ -101,11 +105,29 @@ class AutonomousTradingLoop:
         from agent.trading.broker_adapter import BrokerAdapter
         self.broker = BrokerAdapter()
 
+        # Phase 2b: Upstox Adapter (Indian Market)
+        self.upstox = None
+        try:
+            from agent.trading.upstox_adapter import UpstoxAdapter
+            self.upstox = UpstoxAdapter()
+            if self.upstox.is_connected:
+                self.logger.info("UpstoxAdapter connected — Indian market data available")
+            else:
+                self.logger.info(
+                    f"UpstoxAdapter initialized — awaiting OAuth login. "
+                    f"Visit: {self.upstox.get_login_url()}"
+                )
+        except Exception as e:
+            self.logger.warning(f"UpstoxAdapter init failed (Indian data unavailable): {e}")
+
         from agent.trading.market_data_feed import MarketDataFeed
         self.data_feed = MarketDataFeed(
             broker_adapter=self.broker,
             database=self.database,
+            upstox_adapter=self.upstox,
         )
+        # Sync market context
+        self.data_feed.set_active_market(self.config.get("market", "USA"))
 
         # Existing engines (all imports are safe — they exist)
         from agent.trading.indicators_engine import IndicatorsEngine

@@ -190,7 +190,7 @@ def _auto_route_model(
     logger.info(f"🤖 Auto model routing: kind={kind} score={score} threshold={threshold} -> {chosen}")
     return chosen
 
-async def broadcast_event(event_type: str, role: str, text: str, task_id: str = None, partial: bool = False):
+async def broadcast_event(event_type: str, role: str, text: str, task_id: str = None, partial: bool = False, metadata: dict = None):
     """Helper to broadcast event according to mandatory model."""
     event = {
         "type": event_type,
@@ -198,7 +198,8 @@ async def broadcast_event(event_type: str, role: str, text: str, task_id: str = 
         "text": text,
         "timestamp": datetime.utcnow().isoformat(),
         "task_id": task_id,
-        "partial": partial
+        "partial": partial,
+        "metadata": metadata or {}
     }
     await manager.broadcast(event)
 
@@ -489,6 +490,136 @@ async def chat(request: ChatRequest):
             status="error",
             action_taken=None
         )
+
+# ==========================================
+# PHANTOM CYBERSECURITY AGENT ENDPOINT
+# ==========================================
+
+@app.post("/api/phantom", response_model=ChatResponse)
+async def phantom_chat(request: ChatRequest):
+    """
+    Dedicated cybersecurity agent endpoint.
+    
+    ALL messages sent here are processed through the PHANTOM persona
+    with the full cybersecurity master system prompt, regardless of
+    keyword detection. This is used by the Hacking Terminal UI.
+    """
+    if agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+    
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    logger.info(f"🔓 PHANTOM endpoint: {request.message[:100]}")
+    
+    try:
+        # Force route through PHANTOM — bypass all normal routing
+        response = await agent._execute_phantom_query(
+            request.message, source="local", task_id=f"phantom-{id(request)}"
+        )
+        
+        # Broadcast to WebSocket clients with source tag to avoid leaking into main chat
+        await broadcast_event("assistant", "assistant", response, metadata={"source": "phantom"})
+        
+        logger.info(f"🔓 PHANTOM response: {response[:100]}...")
+        
+        return ChatResponse(
+            response=response,
+            status="success",
+            action_taken="phantom_cybersecurity"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ PHANTOM error: {e}")
+        return ChatResponse(
+            response=f"PHANTOM error: {str(e)}",
+            status="error",
+            action_taken=None
+        )
+
+# ==========================================
+# SHELL EXECUTION ENDPOINT (PHANTOM Terminals)
+# ==========================================
+
+class ShellExecRequest(BaseModel):
+    command: str
+    shell: str = "powershell"  # "powershell" or "bash"
+    timeout: int = 30
+
+@app.post("/api/shell/exec")
+async def execute_shell_command(req: ShellExecRequest):
+    """
+    Execute a system command directly via PowerShell or Bash.
+    Returns the raw stdout/stderr output.
+    Used by the PHANTOM Hacking Terminal's embedded terminals.
+    """
+    import subprocess
+    import platform
+
+    cmd = req.command.strip()
+    if not cmd:
+        return {"output": "", "error": "Empty command", "exit_code": -1}
+
+    logger.info(f"🖥 Shell exec [{req.shell}]: {cmd[:100]}")
+
+    try:
+        if req.shell == "bash":
+            # Use Git Bash on Windows, native bash on Linux/Mac
+            if platform.system() == "Windows":
+                # Try common Git Bash paths
+                bash_paths = [
+                    r"C:\Program Files\Git\bin\bash.exe",
+                    r"C:\Program Files (x86)\Git\bin\bash.exe",
+                    r"C:\Users\{}\AppData\Local\Programs\Git\bin\bash.exe".format(os.environ.get("USERNAME", "")),
+                ]
+                bash_exe = "bash"
+                for bp in bash_paths:
+                    if os.path.exists(bp):
+                        bash_exe = bp
+                        break
+                result = subprocess.run(
+                    [bash_exe, "-c", cmd],
+                    capture_output=True, text=True, timeout=req.timeout,
+                    cwd=os.getcwd()
+                )
+            else:
+                result = subprocess.run(
+                    ["bash", "-c", cmd],
+                    capture_output=True, text=True, timeout=req.timeout,
+                    cwd=os.getcwd()
+                )
+        else:
+            # PowerShell
+            if platform.system() == "Windows":
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                    capture_output=True, text=True, timeout=req.timeout,
+                    cwd=os.getcwd()
+                )
+            else:
+                result = subprocess.run(
+                    ["pwsh", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                    capture_output=True, text=True, timeout=req.timeout,
+                    cwd=os.getcwd()
+                )
+
+        output = result.stdout
+        if result.stderr:
+            output += ("\n" if output else "") + result.stderr
+
+        return {
+            "output": output.strip(),
+            "exit_code": result.returncode,
+            "error": None
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"output": f"Command timed out after {req.timeout}s", "exit_code": -1, "error": "timeout"}
+    except FileNotFoundError as e:
+        return {"output": f"Shell not found: {e}", "exit_code": -1, "error": "shell_not_found"}
+    except Exception as e:
+        logger.error(f"Shell exec error: {e}")
+        return {"output": f"Execution error: {str(e)}", "exit_code": -1, "error": str(e)}
 
 # ==========================================
 # CHAT HISTORY ENDPOINTS
@@ -1756,6 +1887,67 @@ async def set_trading_market(req: MarketRequest):
     loop.set_market(market)
     return {"status": "ok", "market": market, "symbols": loop.config.get("symbols", [])}
 
+
+# ==========================================
+# UPSTOX API — OAuth & Status
+# ==========================================
+
+@app.get("/api/upstox/status")
+async def upstox_status():
+    """Get Upstox adapter connection status and login URL."""
+    loop = _get_autonomous_loop()
+    if not loop or not loop.upstox:
+        return {
+            "connected": False,
+            "error": "Upstox adapter not initialized. Set UPSTOX_API_KEY and UPSTOX_API_SECRET in .env"
+        }
+    return loop.upstox.get_status()
+
+
+@app.get("/api/upstox/login")
+async def upstox_login_url():
+    """Get the Upstox OAuth2 login URL for authorization."""
+    loop = _get_autonomous_loop()
+    if not loop or not loop.upstox:
+        raise HTTPException(status_code=500, detail="Upstox adapter not available")
+    
+    if loop.upstox.is_connected:
+        return {"status": "already_connected", "message": "Upstox is already authenticated"}
+    
+    return {"login_url": loop.upstox.get_login_url()}
+
+
+@app.get("/api/upstox/callback")
+async def upstox_oauth_callback(code: str = "", state: str = ""):
+    """
+    OAuth2 callback — Upstox redirects here after user login.
+    Exchanges the authorization code for an access token.
+    """
+    if not code:
+        raise HTTPException(status_code=400, detail="No authorization code received")
+    
+    loop = _get_autonomous_loop()
+    if not loop or not loop.upstox:
+        raise HTTPException(status_code=500, detail="Upstox adapter not available")
+    
+    result = loop.upstox.exchange_code_for_token(code)
+    
+    if result.get("error"):
+        logger.error(f"Upstox OAuth failed: {result.get('message')}")
+        return {
+            "status": "error",
+            "message": result.get("message", "Token exchange failed"),
+        }
+    
+    logger.info("Upstox OAuth successful — Indian market data now available!")
+    
+    # Return a user-friendly HTML page on success
+    return {
+        "status": "success",
+        "message": "Upstox connected! Indian market real-time data is now active.",
+        "expires_at": result.get("expires_at"),
+    }
+
 @app.websocket("/api/trading/ws")
 async def trading_websocket(websocket: WebSocket):
     """Real-time websocket feed for the Trading Terminal."""
@@ -1835,6 +2027,9 @@ async def trading_websocket(websocket: WebSocket):
                     await websocket.send_json(payload)
                 except Exception as e:
                     logging.error(f"WebSocket state build error: {e}")
+                    # If the connection is closed, stop trying to send to this client
+                    if "close" in str(e).lower() or "disconnect" in str(e).lower() or "Cannot call" in str(e):
+                        break
                     
             await asyncio.sleep(5) # Push every 5 seconds
             
@@ -1999,6 +2194,26 @@ async def get_indicators(symbol: str = "AAPL", timeframe: str = "15m"):
         result["bollinger"] = {"upper": upper, "middle": middle, "lower": lower}
     except Exception:
         result["bollinger"] = {"upper": [], "middle": [], "lower": []}
+    
+    # ── ML Prediction (forward-looking) ──
+    try:
+        from agent.trading.ml_predictor import MLPredictor
+        # Lazy singleton
+        if not hasattr(get_indicators, "_ml_predictor"):
+            get_indicators._ml_predictor = MLPredictor()
+        
+        ml = get_indicators._ml_predictor
+        opens_arr = ohlcv.get("opens", closes)
+        prediction = ml.predict(closes, highs, lows,
+                                ohlcv.get("volumes", [0.0] * len(closes)),
+                                opens_arr)
+        if prediction:
+            result["ml_prediction"] = prediction
+        else:
+            result["ml_prediction"] = None
+    except Exception as e:
+        logger.warning(f"ML prediction failed: {e}")
+        result["ml_prediction"] = None
     
     return {"symbol": symbol, "timeframe": timeframe, "indicators": result}
 

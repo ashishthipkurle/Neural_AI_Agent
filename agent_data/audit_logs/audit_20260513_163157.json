@@ -1,0 +1,28 @@
+{
+  "goal": "do a deep research on import export and send it to me on telegram",
+  "log": [
+    {
+      "node": "supervisor",
+      "action": "route",
+      "phase": "planning",
+      "timestamp": "2026-05-13T16:30:44.179294+00:00",
+      "route": "planner",
+      "reason": "default"
+    },
+    {
+      "node": "planner",
+      "action": "plan_created",
+      "plan_length": 94,
+      "scan_rounds": 15,
+      "timestamp": "2026-05-13T16:31:57.430022+00:00"
+    },
+    {
+      "node": "supervisor",
+      "action": "route",
+      "phase": "awaiting_approval",
+      "timestamp": "2026-05-13T16:31:57.456054+00:00",
+      "route": "completion",
+      "reason": "awaiting_approval"
+    }
+  ]
+}

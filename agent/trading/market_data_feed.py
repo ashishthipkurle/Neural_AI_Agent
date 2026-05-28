@@ -2,8 +2,8 @@
 Market Data Feed — Historical & Real-Time Data Provider.
 
 Architecture:
-    - Primary source: Alpaca REST API (bars)
-    - Fallback: yfinance for historical backfill
+    - US Market: Alpaca REST API (primary), yfinance (fallback)
+    - Indian Market: Upstox API v2 (primary), yfinance (fallback)
     - In-memory cache: last 500 candles per symbol/timeframe
     - Data freshness detection: skip stale symbols
     - Candle-close-aligned scheduling helpers
@@ -28,13 +28,15 @@ except ImportError:
 class MarketDataFeed:
     """
     Unified data provider for the autonomous trading system.
+    Routes to Upstox for Indian market, Alpaca for US market.
     """
 
-    def __init__(self, broker_adapter, database, data_ingestion_worker=None) -> None:
+    def __init__(self, broker_adapter, database, data_ingestion_worker=None, upstox_adapter=None) -> None:
         self.logger = logging.getLogger("MarketDataFeed")
         self.broker = broker_adapter
         self.database = database
         self.data_worker = data_ingestion_worker
+        self.upstox = upstox_adapter  # UpstoxAdapter for Indian market
 
         # In-memory cache: {(symbol, timeframe): [candle_dicts]}
         self._cache: Dict[tuple, List[Dict[str, Any]]] = {}
@@ -42,6 +44,9 @@ class MarketDataFeed:
 
         # Staleness tracking: {symbol: last_bar_timestamp_utc}
         self._last_bar_timestamp: Dict[str, float] = {}
+
+        # Current market context (set by AutonomousTradingLoop)
+        self._active_market: str = "USA"
 
         # Timeframe to yfinance interval mapping
         self._yf_interval_map = {
@@ -55,6 +60,80 @@ class MarketDataFeed:
             "1h": "1Hour", "1d": "1Day",
         }
 
+        # yfinance symbol mapping for Indian market (display name → yfinance ticker)
+        self._yf_indian_map = {
+            "NIFTY 50": "^NSEI",
+            "NIFTY50": "^NSEI",
+            "SENSEX": "^BSESN",
+            "BANKNIFTY": "^NSEBANK",
+            "NIFTY BANK": "^NSEBANK",
+            "RELIANCE": "RELIANCE.NS",
+            "TCS": "TCS.NS",
+            "HDFCBANK": "HDFCBANK.NS",
+            "INFY": "INFY.NS",
+            "SBIN": "SBIN.NS",
+            "ICICIBANK": "ICICIBANK.NS",
+            "HINDUNILVR": "HINDUNILVR.NS",
+            "BHARTIARTL": "BHARTIARTL.NS",
+            "ITC": "ITC.NS",
+            "KOTAKBANK": "KOTAKBANK.NS",
+            "LT": "LT.NS",
+            "AXISBANK": "AXISBANK.NS",
+            "WIPRO": "WIPRO.NS",
+            "TATAMOTORS": "TATAMOTORS.NS",
+            "ADANIENT": "ADANIENT.NS",
+            "MARUTI": "MARUTI.NS",
+            "SUNPHARMA": "SUNPHARMA.NS",
+            "TATASTEEL": "TATASTEEL.NS",
+            "ULTRACEMCO": "ULTRACEMCO.NS",
+            "NTPC": "NTPC.NS",
+            "POWERGRID": "POWERGRID.NS",
+            "ONGC": "ONGC.NS",
+            "BAJFINANCE": "BAJFINANCE.NS",
+            "HCLTECH": "HCLTECH.NS",
+            "ASIANPAINT": "ASIANPAINT.NS",
+            "TITAN": "TITAN.NS",
+            "TECHM": "TECHM.NS",
+        }
+
+    # ══════════════════════════════════════════════════════════════
+    # MARKET CONTEXT
+    # ══════════════════════════════════════════════════════════════
+
+    def set_active_market(self, market: str) -> None:
+        """Set the active market (USA or IND) for data routing."""
+        self._active_market = market.upper()
+        self.logger.info(f"MarketDataFeed active market set to: {self._active_market}")
+
+    def _is_indian_symbol(self, symbol: str) -> bool:
+        """Detect if a symbol belongs to the Indian market."""
+        # Explicit Indian market mode
+        if self._active_market == "IND":
+            return True
+        # Symbol pattern detection
+        indian_patterns = (".NS", ".BO", "^NSEI", "^BSESN", "NIFTY")
+        return any(p in symbol.upper() for p in indian_patterns)
+
+    def _resolve_yf_symbol(self, symbol: str) -> str:
+        """Resolve a display symbol to its yfinance ticker.
+        
+        Uses the Indian mapping table for known symbols, 
+        appends .NS for unmapped NSE stocks, returns as-is for US stocks.
+        """
+        # Already a valid yfinance symbol
+        if symbol.startswith("^") or ".NS" in symbol or ".BO" in symbol:
+            return symbol
+        
+        # Check mapping table
+        if symbol.upper() in self._yf_indian_map:
+            return self._yf_indian_map[symbol.upper()]
+        
+        # If in Indian market mode, append .NS as default
+        if self._active_market == "IND":
+            return f"{symbol}.NS"
+        
+        return symbol
+
     # ══════════════════════════════════════════════════════════════
     # HISTORICAL BACKFILL
     # ══════════════════════════════════════════════════════════════
@@ -64,18 +143,29 @@ class MarketDataFeed:
     ) -> int:
         """
         Fetch historical bars and persist to database.
-        Tries Alpaca first, falls back to yfinance.
+        Routes to Upstox for Indian symbols, Alpaca for US.
+        Falls back to yfinance if primary source fails.
         Returns total candle count saved.
         """
         instrument_id = self.database.get_or_create_instrument(symbol)
+        candles = []
 
-        # Try Alpaca first
-        candles = self._fetch_alpaca_historical(symbol, timeframe, days)
-
-        # Fallback to yfinance
-        if not candles and YFINANCE_AVAILABLE:
-            self.logger.info(f"Alpaca backfill failed for {symbol}, trying yfinance...")
-            candles = self._fetch_yfinance_historical(symbol, timeframe, days)
+        # ── Route based on market ──
+        if self._is_indian_symbol(symbol):
+            # Primary: Upstox API
+            candles = self._fetch_upstox_historical(symbol, timeframe, days)
+            # Fallback: yfinance (use proper symbol mapping)
+            if not candles and YFINANCE_AVAILABLE:
+                self.logger.info(f"Upstox backfill failed for {symbol}, trying yfinance...")
+                yf_symbol = self._resolve_yf_symbol(symbol)
+                candles = self._fetch_yfinance_historical(yf_symbol, timeframe, days)
+        else:
+            # Primary: Alpaca (US market)
+            candles = self._fetch_alpaca_historical(symbol, timeframe, days)
+            # Fallback: yfinance
+            if not candles and YFINANCE_AVAILABLE:
+                self.logger.info(f"Alpaca backfill failed for {symbol}, trying yfinance...")
+                candles = self._fetch_yfinance_historical(symbol, timeframe, days)
 
         if not candles:
             self.logger.error(f"No historical data available for {symbol}")
@@ -158,6 +248,27 @@ class MarketDataFeed:
             return []
 
     # ══════════════════════════════════════════════════════════════
+    # UPSTOX DATA (INDIAN MARKET)
+    # ══════════════════════════════════════════════════════════════
+
+    def _fetch_upstox_historical(
+        self, symbol: str, timeframe: str, days: int
+    ) -> List[Dict[str, Any]]:
+        """Fetch historical bars from Upstox API for Indian stocks."""
+        if not self.upstox or not self.upstox.is_connected:
+            self.logger.debug(f"Upstox not available for {symbol}")
+            return []
+
+        try:
+            candles = self.upstox.get_bars(symbol, timeframe, limit=min(days * 26, 5000))
+            if candles:
+                self.logger.debug(f"Upstox returned {len(candles)} bars for {symbol}")
+            return candles
+        except Exception as e:
+            self.logger.warning(f"Upstox historical fetch failed for {symbol}: {e}")
+            return []
+
+    # ══════════════════════════════════════════════════════════════
     # LATEST DATA ACCESS
     # ══════════════════════════════════════════════════════════════
 
@@ -165,31 +276,82 @@ class MarketDataFeed:
         self, symbol: str, timeframe: str = "15m", limit: int = 200
     ) -> List[Dict[str, Any]]:
         """
-        Get most recent bars. Checks cache first, then broker, then database.
+        Get most recent bars. Checks cache first, then broker/Upstox, then database.
+        Routes Indian symbols to Upstox, US symbols to Alpaca.
+        Falls back to yfinance with periodic refresh when primary brokers are offline.
         Returns list of candle dicts (oldest first).
         """
-        # Check cache
         cache_key = (symbol, timeframe)
-        if cache_key in self._cache and len(self._cache[cache_key]) >= limit:
-            return self._cache[cache_key][-limit:]
+        is_indian = self._is_indian_symbol(symbol)
+        
+        # Determine if a primary (real-time) broker is available for this symbol
+        has_live_broker = False
+        if is_indian and self.upstox and self.upstox.is_connected:
+            has_live_broker = True
+        elif not is_indian and self.broker.is_connected:
+            has_live_broker = True
 
-        # Try broker for fresh data
-        alpaca_tf = self._alpaca_tf_map.get(timeframe)
-        if alpaca_tf and self.broker.is_connected:
-            bars = self.broker.get_bars(symbol, alpaca_tf, limit=limit)
+        # ── Route: Indian market via Upstox (live) ──
+        if is_indian and self.upstox and self.upstox.is_connected:
+            bars = self.upstox.get_bars(symbol, timeframe, limit=limit)
             if bars:
                 self._update_cache(symbol, timeframe, bars)
-                # Also persist
                 instrument_id = self.database.get_or_create_instrument(symbol)
                 self.database.save_candles(instrument_id, timeframe, bars)
                 return bars
 
-        # Fall back to database
+        # ── Route: US market via Alpaca (live) ──
+        if not is_indian:
+            alpaca_tf = self._alpaca_tf_map.get(timeframe)
+            if alpaca_tf and self.broker.is_connected:
+                bars = self.broker.get_bars(symbol, alpaca_tf, limit=limit)
+                if bars:
+                    self._update_cache(symbol, timeframe, bars)
+                    instrument_id = self.database.get_or_create_instrument(symbol)
+                    self.database.save_candles(instrument_id, timeframe, bars)
+                    return bars
+
+        # ── Fallback: yfinance live refresh (when no primary broker) ──
+        # Use a per-symbol cooldown to avoid hammering yfinance on every poll
+        if not has_live_broker and YFINANCE_AVAILABLE:
+            cooldown_key = f"_yf_last_fetch_{symbol}_{timeframe}"
+            last_yf_fetch = getattr(self, cooldown_key, 0.0)
+            yf_cooldown = 5  # seconds between yfinance refreshes
+
+            if time.time() - last_yf_fetch >= yf_cooldown:
+                yf_symbol = self._resolve_yf_symbol(symbol)
+                self.logger.info(f"yfinance live refresh: {symbol} → {yf_symbol} (tf={timeframe})")
+                bars = self._fetch_yfinance_historical(yf_symbol, timeframe, days=7)
+                setattr(self, cooldown_key, time.time())
+                if bars:
+                    self._update_cache(symbol, timeframe, bars)
+                    instrument_id = self.database.get_or_create_instrument(symbol)
+                    self.database.save_candles(instrument_id, timeframe, bars)
+                    return bars[-limit:]
+
+        # ── Use cache if available ──
+        if cache_key in self._cache and self._cache[cache_key]:
+            return self._cache[cache_key][-limit:]
+
+        # ── Fall back to database ──
         instrument_id = self.database.get_or_create_instrument(symbol)
         db_candles = self.database.get_candles(instrument_id, timeframe, limit=limit)
         if db_candles:
             self._update_cache(symbol, timeframe, db_candles)
-        return db_candles
+            return db_candles
+
+        # ── Last resort: force yfinance fetch ──
+        if YFINANCE_AVAILABLE:
+            yf_symbol = self._resolve_yf_symbol(symbol)
+            self.logger.info(f"Trying yfinance last-resort fetch: {symbol} → {yf_symbol}")
+            bars = self._fetch_yfinance_historical(yf_symbol, timeframe, days=30)
+            if bars:
+                self._update_cache(symbol, timeframe, bars)
+                instrument_id = self.database.get_or_create_instrument(symbol)
+                self.database.save_candles(instrument_id, timeframe, bars)
+                return bars[-limit:]
+
+        return []
 
     def get_ohlcv_arrays(
         self, symbol: str, timeframe: str = "15m", limit: int = 200
@@ -264,13 +426,16 @@ class MarketDataFeed:
         Asset-type-aware market hours check.
         Crypto: always tradeable (24/7).
         Paper mode: always tradeable (for testing/demo).
-        Equity (live): only during market hours.
+        Equity (live): only during respective market hours.
         """
         if asset_type.upper() in ("CRYPTO", "CRYPTOCURRENCY"):
             return True
         # Paper mode: always allow trading for demo/testing
         if mode == "paper":
             return True
+        # Indian market hours check
+        if self._is_indian_symbol(symbol) and self.upstox:
+            return self.upstox.is_market_open()
         return self.broker.is_market_open()
 
     # ══════════════════════════════════════════════════════════════
