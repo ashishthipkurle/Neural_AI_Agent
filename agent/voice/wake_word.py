@@ -1,103 +1,155 @@
+"""
+Wake Word Engine
 
+VAD-gated faster-whisper-tiny with fuzzy match on 'hey neural'/'hello neural'.
+"""
 import logging
-import json
-import sys
-import queue
 import time
+import io
+import wave
+import numpy as np
 
 try:
-    import sounddevice as sd
-    from vosk import Model, KaldiRecognizer
+    import webrtcvad
 except ImportError:
-    sd = None
-    Model = None
-    KaldiRecognizer = None
+    webrtcvad = None
+
+try:
+    from faster_whisper import WhisperModel
+except ImportError:
+    WhisperModel = None
+
+logger = logging.getLogger("WakeWord")
 
 class WakeWordEngine:
-    def __init__(self, model_path="voice_models/vosk-model-small-en-us-0.15", wake_words=None):
-        self.logger = logging.getLogger("WakeWordEngine")
-        self.wake_words = wake_words or ["hey indra", "hey nova"]
-        self.q = queue.Queue()
-        self.running = False
-        self.model = None # Init to None to avoid AttributeError
+    def __init__(self, wake_words=None, device="cuda"):
+        self.wake_words = wake_words or ["hey neural", "hello neural"]
+        self.device = device
         
-        if not Model:
-            self.logger.error("Vosk/SoundDevice not installed. Wake Word will not function.")
+        if webrtcvad:
+            self.vad = webrtcvad.Vad(2)  # Aggressiveness 0-3
+        else:
+            self.vad = None
+            logger.warning("webrtcvad not installed. Wake Word will be less efficient.")
+        
+        if not WhisperModel:
+            logger.error("faster-whisper not installed. Wake Word will not function.")
+            self.model = None
             return
 
-        try:
-            self.logger.info(f"Loading Vosk Model from {model_path}...")
-            # Note: User must provide the model path or we use default
-            self.model = Model(model_path)
-            self.logger.info("Vosk Model loaded successfully.")
-        except Exception as e:
-            self.logger.error(f"Failed to load Vosk model: {e}")
-            self.model = None
+        logger.info(f"Loading faster-whisper (tiny.en) on {device} for wake word...")
+        self.model = WhisperModel("tiny.en", device=device, compute_type="float16" if device=="cuda" else "int8")
+        logger.info("faster-whisper wake word model loaded.")
 
-    def _callback(self, indata, frames, time, status):
-        """This is called (from a separate thread) for each audio block."""
-        if status:
-            print(status, file=sys.stderr)
-        self.q.put(bytes(indata))
-
-    def wait_for_wake_word(self, on_partial=None, is_muted_callback=None, should_pause_callback=None):
-        """
-        Blocking method that listens until a wake word is detected.
-        
-        Args:
-            on_partial: Optional callback for real-time partial results.
-            is_muted_callback: Optional function returning bool (True if muted).
-        """
-        if not self.model or not sd:
-            self.logger.error("Wake Word engine not available.")
-            return None
-
-        self.running = True
-        try:
-            with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16',
-                                   channels=1, callback=self._callback):
-                self.logger.info("Listening for Wake Word...")
-                rec = KaldiRecognizer(self.model, 16000)
-                
-                while self.running:
-                    # Check pause state (e.g. agent is speaking/busy)
-                    if should_pause_callback and should_pause_callback():
-                        # Drain queue to discard audio captured while busy
-                        while not self.q.empty():
-                            self.q.get()
-                        time.sleep(0.1) # Prevent CPU spin
-                        continue
-
-                    # Check mute state inside the loop
-                    if is_muted_callback and is_muted_callback():
-                        # Clear any buffered audio effectively ignoring input
-                        while not self.q.empty():
-                            self.q.get()
-                        time.sleep(0.1)
-                        continue
-
-                    data = self.q.get()
-                    if rec.AcceptWaveform(data):
-                        result = json.loads(rec.Result())
-                        text = result.get('text', '').lower()
-                        if text:
-                            # Log everything for debug tuning
-                            self.logger.info(f"VOSK HEARD: '{text}'")
-                            
-                        if any(ww in text for ww in self.wake_words):
-                            self.logger.info(f"Wake Word Detected: {text}")
-                            return text
-                    else:
-                        # Partial result
-                        if on_partial:
-                            partial = json.loads(rec.PartialResult())
-                            partial_text = partial.get('partial', '')
-                            if partial_text:
-                                on_partial(partial_text)
-                        
-        except Exception as e:
-            self.logger.error(f"Error during wake word listening: {e}")
-            return None
+    def fuzzy_match(self, text):
+        t = text.lower().replace(".", "").replace(",", "").replace("!", "").replace("?", "").strip()
+        if not t:
+            return False
             
-    def stop(self):
-        self.running = False
+        for ww in self.wake_words:
+            if ww in t:
+                return True
+        # Basic fuzzy logic for Whisper mishears
+        if "hey" in t and "neural" in t: return True
+        if "hello" in t and "neural" in t: return True
+        if "hey" in t and "nero" in t: return True
+        if "new roll" in t: return True
+        if "hey ne" in t: return True
+        return False
+
+    def listen_for_wake_word(self, audio_stream, should_pause_callback=None):
+        if not self.model or not self.vad:
+            return None
+
+        audio_stream.start()
+        audio_stream.clear_buffer()
+
+        frame_duration_ms = 30
+        sample_rate = 16000
+        frame_size = int(sample_rate * (frame_duration_ms / 1000.0) * 2) # bytes (16-bit)
+
+        buffer = b''
+        speech_frames = []
+        is_speaking = False
+        silence_counter = 0
+        silence_threshold = 20 # approx 0.6s of silence
+        
+        # Pre-roll buffer to catch the beginning of words
+        pre_roll = []
+        pre_roll_max = 10 # 300ms
+
+        logger.info("Listening for Wake Word...")
+
+        while True:
+            if should_pause_callback and should_pause_callback():
+                audio_stream.clear_buffer()
+                time.sleep(0.1)
+                buffer = b''
+                speech_frames = []
+                is_speaking = False
+                continue
+                
+            block = audio_stream.get_audio_block(timeout=0.1)
+            if block is None:
+                continue
+
+            buffer += block
+            
+            while len(buffer) >= frame_size:
+                frame = buffer[:frame_size]
+                buffer = buffer[frame_size:]
+                
+                try:
+                    is_speech = self.vad.is_speech(frame, sample_rate)
+                except Exception:
+                    is_speech = False
+                    
+                if is_speech:
+                    silence_counter = 0
+                    if not is_speaking:
+                        is_speaking = True
+                        speech_frames.extend(pre_roll)
+                    if is_speaking:
+                        speech_frames.append(frame)
+                else:
+                    if is_speaking:
+                        speech_frames.append(frame)
+                        silence_counter += 1
+                        if silence_counter > silence_threshold:
+                            # End of utterance, transcribe
+                            audio_data = b''.join(speech_frames)
+                            
+                            is_speaking = False
+                            speech_frames = []
+                            silence_counter = 0
+                            pre_roll = []
+                            
+                            # Transcribe if long enough
+                            if len(audio_data) > sample_rate * 2 * 0.4: # at least 0.4 seconds
+                                text = self._transcribe(audio_data)
+                                if text:
+                                    if self.fuzzy_match(text):
+                                        logger.info(f"Wake Word Detected: {text}")
+                                        return text
+                    else:
+                        pre_roll.append(frame)
+                        if len(pre_roll) > pre_roll_max:
+                            pre_roll.pop(0)
+                                    
+    def _transcribe(self, audio_bytes):
+        wav_io = io.BytesIO()
+        with wave.open(wav_io, 'wb') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(audio_bytes)
+            
+        wav_io.seek(0)
+        
+        try:
+            segments, info = self.model.transcribe(wav_io, beam_size=1)
+            text = " ".join([segment.text for segment in segments])
+            return text.strip()
+        except Exception as e:
+            logger.error(f"Transcription error: {e}")
+            return ""

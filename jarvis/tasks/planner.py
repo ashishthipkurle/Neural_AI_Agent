@@ -1,5 +1,5 @@
 """
-INDRA Task Planner — Breaks tasks into atomic steps.
+INDRA Task Planner -- Breaks tasks into atomic steps.
 """
 
 import sys

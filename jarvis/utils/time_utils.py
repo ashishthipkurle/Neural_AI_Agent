@@ -1,5 +1,5 @@
 """
-INDRA Time Utilities — Current time, greeting period, IST handling.
+INDRA Time Utilities -- Current time, greeting period, IST handling.
 """
 
 from datetime import datetime, timezone, timedelta

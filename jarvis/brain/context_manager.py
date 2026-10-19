@@ -1,5 +1,5 @@
 """
-INDRA Context Manager — Token counting, history trimming, context assembly.
+INDRA Context Manager -- Token counting, history trimming, context assembly.
 Ensures LLM calls never exceed the context window. Identity and memory are never trimmed.
 """
 
@@ -20,7 +20,7 @@ try:
     HAS_TIKTOKEN = True
 except ImportError:
     HAS_TIKTOKEN = False
-    logger.warning("tiktoken not installed — using approximate token counting (words/0.75)")
+    logger.warning("tiktoken not installed -- using approximate token counting (words/0.75)")
 
 
 def _count_tokens(text: str) -> int:

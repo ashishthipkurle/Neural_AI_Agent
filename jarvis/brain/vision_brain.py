@@ -1,5 +1,5 @@
 """
-INDRA Vision Brain — Vision LLM for screen understanding.
+INDRA Vision Brain -- Vision LLM for screen understanding.
 Runs in its own thread pool, completely isolated from ChatBrain.
 """
 
@@ -28,7 +28,7 @@ except ImportError:
 class VisionBrain:
     """
     Vision LLM for screen understanding and action planning.
-    Separate thread pool — NEVER shares threads with ChatBrain.
+    Separate thread pool -- NEVER shares threads with ChatBrain.
     """
 
     def __init__(self):

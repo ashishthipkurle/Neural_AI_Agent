@@ -1,5 +1,5 @@
 """
-INDRA Memory Store — ChromaDB persistent vector storage.
+INDRA Memory Store -- ChromaDB persistent vector storage.
 Stores and recalls memories semantically for personalised interactions.
 """
 
@@ -54,7 +54,7 @@ class MemoryStore:
         )
 
         logger.info(
-            f"Memory loaded — identity: {self.identity.count()}, "
+            f"Memory loaded -- identity: {self.identity.count()}, "
             f"sessions: {self.sessions.count()}, "
             f"projects: {self.projects.count()}"
         )
@@ -141,7 +141,7 @@ class MemoryStore:
         })
 
     def save_session_summary(self):
-        """Called on shutdown — stores a summary of the current session."""
+        """Called on shutdown -- stores a summary of the current session."""
         summary = f"Session ended at {datetime.now().strftime('%I:%M %p on %A %d %B %Y')}."
         self.save_session(summary)
         logger.info("Session summary saved to memory.")

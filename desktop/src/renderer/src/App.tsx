@@ -36,6 +36,9 @@ import CodeEditorView from "./components/CodeEditor/CodeEditorView";
 import Dashboard from "./components/Dashboard/Dashboard";
 import TradingTerminal from "./components/Dashboard/TradingTerminal";
 import CyberSecurityView from "./components/Dashboard/CyberSecurityView";
+import WorkflowBuilderView from "./components/Dashboard/WorkflowBuilderView";
+import ComputerControlView from "./components/Dashboard/ComputerControlView";
+import ContentCreatorView from "./components/Dashboard/ContentCreatorView";
 import { api } from "./lib/api";
 
 /* ================= TYPES ================= */
@@ -317,6 +320,19 @@ function HistoryPanel({
                 </button>
                 <button onClick={onToggleCode} className="flex items-center gap-3 w-full p-2 hover:bg-white/5 rounded-lg transition-colors mt-0.5 text-purple-400">
                     <Code size={16} /> <span className="text-sm font-medium">Coding Agent</span>
+                </button>
+                <button onClick={() => { (window as any).__openAgent?.(null); (window as any).__closeAllPanels?.(); }} className="flex items-center gap-3 w-full p-2 hover:bg-white/5 rounded-lg transition-colors mt-0.5 text-emerald-400">
+                    <MessageSquare size={16} /> <span className="text-sm font-medium">General Agent</span>
+                    <span className="ml-auto text-[9px] text-slate-600 bg-white/5 px-1.5 py-0.5 rounded-full">HOME</span>
+                </button>
+                <button onClick={() => (window as any).__openAgent?.('computer_control')} className="flex items-center gap-3 w-full p-2 hover:bg-white/5 rounded-lg transition-colors mt-0.5 text-orange-400">
+                    <Cpu size={16} /> <span className="text-sm font-medium">Computer Control</span>
+                </button>
+                <button onClick={() => (window as any).__openAgent?.('workflow')} className="flex items-center gap-3 w-full p-2 hover:bg-white/5 rounded-lg transition-colors mt-0.5 text-yellow-400">
+                    <Sparkles size={16} /> <span className="text-sm font-medium">Workflow Agent</span>
+                </button>
+                <button onClick={() => (window as any).__openAgent?.('content_creator')} className="flex items-center gap-3 w-full p-2 hover:bg-white/5 rounded-lg transition-colors mt-0.5 text-pink-400">
+                    <Edit size={16} /> <span className="text-sm font-medium">Content Creator</span>
                 </button>
                 
             </div>
@@ -980,6 +996,9 @@ export default function NeuralInterface() {
     const [liveFeedMode, setLiveFeedMode] = useState<"idle" | "camera" | "cctv">("idle"); // State for live feed
     const [showTradingPanel, setShowTradingPanel] = useState(false);
     const [showCyberSecurity, setShowCyberSecurity] = useState(false);
+    const [showComputerControl, setShowComputerControl] = useState(false);
+    const [showWorkflow, setShowWorkflow] = useState(false);
+    const [showContentCreator, setShowContentCreator] = useState(false);
 
     const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([
@@ -1003,6 +1022,27 @@ export default function NeuralInterface() {
         window.electronAPI?.menu?.onToggleCodeEditor?.(() => {
             setShowCodeEditor((prev) => !prev);
         });
+        // Register agent panel openers for sidebar buttons
+        (window as any).__openAgent = (agentKey: string | null) => {
+            if (agentKey === 'computer_control') setShowComputerControl(true);
+            else if (agentKey === 'workflow') setShowWorkflow(true);
+            else if (agentKey === 'content_creator') setShowContentCreator(true);
+        };
+        // Register close-all for General Agent "go home" button
+        (window as any).__closeAllPanels = () => {
+            setShowTradingPanel(false);
+            setShowCyberSecurity(false);
+            setShowCodeEditor(false);
+            setShowDashboard(false);
+            setShowComputerControl(false);
+            setShowWorkflow(false);
+            setShowContentCreator(false);
+            setLiveFeedMode("idle");
+        };
+        return () => {
+            delete (window as any).__openAgent;
+            delete (window as any).__closeAllPanels;
+        };
     }, []);
 
     // Metrics State (Dynamic)
@@ -1645,6 +1685,17 @@ export default function NeuralInterface() {
             {/* CYBERSECURITY FULL-SCREEN OVERLAY */}
             {showCyberSecurity && (
                 <CyberSecurityView onClose={() => setShowCyberSecurity(false)} />
+            )}
+
+            {/* DEDICATED AGENT PAGES */}
+            {showComputerControl && (
+                <ComputerControlView onClose={() => setShowComputerControl(false)} />
+            )}
+            {showWorkflow && (
+                <WorkflowBuilderView onClose={() => setShowWorkflow(false)} />
+            )}
+            {showContentCreator && (
+                <ContentCreatorView onClose={() => setShowContentCreator(false)} />
             )}
 
             <Dashboard isOpen={showDashboard} onClose={() => setShowDashboard(false)} />

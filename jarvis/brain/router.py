@@ -1,5 +1,5 @@
 """
-INDRA Request Router — Classifies input as TYPE 1/2/3/4.
+INDRA Request Router -- Classifies input as TYPE 1/2/3/4.
 Routes correctly between chat_brain (conversation) and executor (action).
 """
 
@@ -23,17 +23,17 @@ except ImportError:
 class Router:
     """
     Classifies user intent into one of 4 types:
-      TYPE 1 — CONVERSATION (fast LLM)
-      TYPE 2 — HYBRID (verbal answer + fast action)
-      TYPE 3 — COMPUTER TASK (executor via vision LLM)
-      TYPE 4 — AMBIGUOUS (ask clarifying question)
+      TYPE 1 -- CONVERSATION (fast LLM)
+      TYPE 2 -- HYBRID (verbal answer + fast action)
+      TYPE 3 -- COMPUTER TASK (executor via vision LLM)
+      TYPE 4 -- AMBIGUOUS (ask clarifying question)
     """
 
     def __init__(self, chat_brain, vision_brain):
         self.chat = chat_brain
         self.vision = vision_brain
 
-    # ── Keywords for fast routing (no LLM needed) ──
+    # -- Keywords for fast routing (no LLM needed) --
     ACTION_KEYWORDS = [
         "open", "close", "launch", "start", "run", "click", "type",
         "search", "download", "install", "uninstall", "delete",
@@ -65,19 +65,19 @@ class Router:
 
         text_lower = text.lower().strip().rstrip(".")
 
-        # ── Fast path: greeting check ──
+        # -- Fast path: greeting check --
         for kw in self.GREETING_KEYWORDS:
             if text_lower == kw or text_lower.startswith(kw + " ") or text_lower.startswith(kw + ","):
                 logger.debug(f"Fast-routed '{text[:30]}' as TYPE1 (keyword: {kw})")
                 return "TYPE1"
 
-        # ── Fast path: direct action keyword at start ──
+        # -- Fast path: direct action keyword at start --
         for kw in self.ACTION_KEYWORDS:
             if text_lower.startswith(kw + " ") or text_lower.startswith(kw + "."):
                 logger.debug(f"Fast-routed '{text[:30]}' as TYPE3 (keyword: {kw})")
                 return "TYPE3"
 
-        # ── Fast path: multi-command patterns like "in telegram send hi" ──
+        # -- Fast path: multi-command patterns like "in telegram send hi" --
         for pat in self.MULTI_CMD_PATTERNS:
             if text_lower.startswith(pat):
                 # Check if any action keyword appears later in the sentence
@@ -87,7 +87,7 @@ class Router:
                         logger.debug(f"Fast-routed '{text[:30]}' as TYPE3 (multi-cmd: {pat}+{kw})")
                         return "TYPE3"
 
-        # ── Slow path: LLM classification ──
+        # -- Slow path: LLM classification --
         if not HAS_OLLAMA:
             return "TYPE1"
 

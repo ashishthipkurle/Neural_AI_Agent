@@ -23,7 +23,7 @@ class StrategyEngine:
     Evaluates 4 concrete trading strategies against live market data.
     """
 
-    COOLDOWN_BARS = 1  # Reduced for paper mode demo (was 4)
+    COOLDOWN_BARS = 4  # Anti-whipsaw: 4-bar cooldown per symbol
 
     def __init__(
         self,
@@ -172,9 +172,9 @@ class StrategyEngine:
         Target: 4× ATR from entry (2:1 R:R)
         Filter: TRENDING_VOLATILE or EXPANSION_BREAKOUT regimes only
         """
-        # RELAXED FOR DEMO: Allow all regimes to fire trades immediately
-        if regime not in ("TRENDING_VOLATILE", "EXPANSION_BREAKOUT", "QUIET", "MEAN_REVERTING", "LOW_VOL_RANGE"):
-            pass
+        # Regime filter: only fire in trending/breakout regimes
+        if regime not in ("TRENDING_VOLATILE", "EXPANSION_BREAKOUT"):
+            return None
 
         closes = ohlcv["closes"]
         highs = ohlcv["highs"]
@@ -199,16 +199,24 @@ class StrategyEngine:
         if atr <= 0:
             return None
 
+        # ADX filter: need sufficient trend strength
+        if adx < 20:
+            return None
+
         entry_price = closes[-1]
         direction = None
 
-        # Bullish momentum (RELAXED FOR DEMO: just requires EMA20 > EMA50, no crossover)
-        if ema20_now > ema50_now:
-            direction = "LONG"
+        # Bullish crossover: EMA20 crosses above EMA50 (was below, now above)
+        if ema20_now > ema50_now and ema20_prev <= ema50_prev:
+            # RSI range filter for LONG: only if RSI in [40, 70]
+            if 40 <= rsi <= 70:
+                direction = "LONG"
 
-        # Bearish momentum
-        elif ema20_now < ema50_now:
-            direction = "SHORT"
+        # Bearish crossover: EMA20 crosses below EMA50 (was above, now below)
+        elif ema20_now < ema50_now and ema20_prev >= ema50_prev:
+            # RSI range filter for SHORT: only if RSI in [30, 60]
+            if 30 <= rsi <= 60:
+                direction = "SHORT"
 
         if not direction:
             return None
@@ -256,8 +264,8 @@ class StrategyEngine:
 
         ind = self.indicators
 
-        bb = ind.calculate_bollinger_bands(closes, period=20, std_dev=2.0)
-        if not bb or bb.get("upper", 0) == 0:
+        bb = ind.calculate_bollinger_bands(closes, period=20, num_std=2.0)
+        if not bb or bb[0] == 0:
             return None
 
         rsi = ind.calculate_rsi(closes, period=14)
@@ -274,9 +282,9 @@ class StrategyEngine:
             return None
 
         direction = None
-        upper = bb["upper"]
-        lower = bb["lower"]
-        middle = bb["middle"]
+        upper = bb[0]
+        lower = bb[2]
+        middle = bb[1]
 
         if entry_price <= lower and rsi < 30:
             direction = "LONG"

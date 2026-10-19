@@ -1,7 +1,7 @@
 """
-INDRA Eyes — 60fps screen capture + OpenCV change detection.
+INDRA Eyes -- 60fps screen capture + OpenCV change detection.
 Captures continuously; only fires events when meaningful change is detected.
-Never calls the vision LLM directly — that is the executor's job.
+Never calls the vision LLM directly -- that is the executor's job.
 """
 
 import threading
@@ -30,7 +30,7 @@ try:
     HAS_CV2 = True
 except ImportError:
     HAS_CV2 = False
-    logger.warning("opencv-python not installed — change detection unavailable")
+    logger.warning("opencv-python not installed -- change detection unavailable")
 
 try:
     from PIL import Image
@@ -97,14 +97,14 @@ class Eyes:
 
             if HAS_PIL:
                 img = Image.fromarray(rgb if not HAS_CV2 else cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB))
-                # Send at native resolution — no resize!
+                # Send at native resolution -- no resize!
                 # Vision model coordinates must match actual screen coordinates.
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=60)
                 buf.seek(0)
                 return base64.b64encode(buf.read()).decode("utf-8")
             elif HAS_CV2:
-                # Send at native resolution — no resize!
+                # Send at native resolution -- no resize!
                 _, buf = cv2.imencode('.jpg', cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 60])
                 return base64.b64encode(buf.tobytes()).decode("utf-8")
 
@@ -114,9 +114,9 @@ class Eyes:
         return ""
 
     def _capture_loop(self):
-        """Main capture loop — runs at target FPS."""
+        """Main capture loop -- runs at target FPS."""
         if not HAS_MSS:
-            logger.error("mss not available — Eyes cannot start")
+            logger.error("mss not available -- Eyes cannot start")
             return
 
         frame_time = 1.0 / CAPTURE_FPS

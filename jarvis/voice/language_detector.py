@@ -1,5 +1,5 @@
 """
-INDRA Language Detector — Detects if input is English, Hindi, or Marathi.
+INDRA Language Detector -- Detects if input is English, Hindi, or Marathi.
 Used to route TTS to the correct engine (Kokoro for English, gTTS for Hindi/Marathi).
 """
 
@@ -17,7 +17,7 @@ try:
     HAS_LANGDETECT = True
 except ImportError:
     HAS_LANGDETECT = False
-    logger.warning("langdetect not installed — defaulting all text to English")
+    logger.warning("langdetect not installed -- defaulting all text to English")
 
 LANGUAGE_MAP = {
     "en": "english",
@@ -45,7 +45,7 @@ def detect_language(text: str) -> str:
     try:
         code = detect(text)
         detected = LANGUAGE_MAP.get(code, "english")
-        logger.debug(f"Detected '{code}' → {detected} for: {text[:40]}...")
+        logger.debug(f"Detected '{code}' -> {detected} for: {text[:40]}...")
         return detected
     except Exception as e:
         logger.debug(f"Language detection failed ({e}), defaulting to English")

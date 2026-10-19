@@ -19,6 +19,11 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
+try:
+    from agent.trading.trading_events import trading_events as _trading_events
+except ImportError:
+    _trading_events = None
+
 
 class AutonomousTradingLoop:
     """
@@ -37,6 +42,7 @@ class AutonomousTradingLoop:
         "max_portfolio_exposure": 0.25,
         "initial_capital": 10000,
         "strategies_enabled": ["trend_following", "mean_reversion", "breakout", "faiss_pattern"],
+        "demo_mode": False,  # Fast loop for live demos only (separate from paper mode)
     }
 
     def __init__(self, config: Dict[str, Any] = None) -> None:
@@ -170,6 +176,13 @@ class AutonomousTradingLoop:
         self.performance_monitor = None
         self.universe_manager = None
         self.screener = None
+        self.ml_predictor = None
+        self.learning_engine = None
+        self.earnings_guard = None
+        self.ta_adapter = None
+        self.llm_budget = None
+        self.llm_reviewer = None
+        self.report_generator = None
 
         try:
             from agent.trading.feature_engine import FeatureEngine
@@ -212,6 +225,59 @@ class AutonomousTradingLoop:
             self.screener = ScreenerEngine()
         except Exception:
             pass
+
+        try:
+            from agent.trading.ml_predictor import MLPredictor
+            self.ml_predictor = MLPredictor()
+            self.logger.info("MLPredictor initialized")
+        except Exception as e:
+            self.logger.warning(f"MLPredictor init failed (continuing without ML): {e}")
+
+        try:
+            from agent.trading.learning_engine import LearningEngine
+            self.learning_engine = LearningEngine(database=self.database)
+            self.logger.info("LearningEngine initialized")
+        except Exception as e:
+            self.logger.warning(f"LearningEngine init failed: {e}")
+
+        try:
+            from agent.trading.earnings_guard import EarningsGuard
+            self.earnings_guard = EarningsGuard()
+            self.logger.info("EarningsGuard initialized")
+        except Exception as e:
+            self.logger.warning(f"EarningsGuard init failed: {e}")
+
+        try:
+            from agent.trading.llm_budget import LLMBudget
+            self.llm_budget = LLMBudget(database=self.database)
+            self.logger.info("LLMBudget initialized")
+        except Exception as e:
+            self.logger.warning(f"LLMBudget init failed: {e}")
+
+        try:
+            from agent.trading.ta_adapter import TradingAgentsAdapter
+            self.ta_adapter = TradingAgentsAdapter(
+                config=self.config, database=self.database, llm_budget=self.llm_budget
+            )
+            self.logger.info("TradingAgentsAdapter initialized")
+        except Exception as e:
+            self.logger.warning(f"TradingAgentsAdapter init failed: {e}")
+
+        try:
+            from agent.trading.llm_reviewer import LLMPreTradeReviewer
+            self.llm_reviewer = LLMPreTradeReviewer()
+            self.logger.info("LLMPreTradeReviewer initialized")
+        except Exception as e:
+            self.logger.warning(f"LLMPreTradeReviewer init failed: {e}")
+
+        try:
+            from agent.trading.report_generator import ReportGenerator
+            self.report_generator = ReportGenerator(
+                database=self.database, learning_engine=self.learning_engine
+            )
+            self.logger.info("ReportGenerator initialized")
+        except Exception as e:
+            self.logger.warning(f"ReportGenerator init failed: {e}")
 
         # Phase 3: Strategy Engine
         from agent.trading.strategy_engine import StrategyEngine
@@ -260,6 +326,8 @@ class AutonomousTradingLoop:
             lifecycle_engine=self.lifecycle_engine,
             strategy_engine=self.strategy_engine,
             telegram_notifier=self.telegram,
+            ml_predictor=self.ml_predictor,
+            earnings_guard=self.earnings_guard,
         )
 
         # Wire order manager back into telegram
@@ -379,7 +447,45 @@ class AutonomousTradingLoop:
         equity = state.get("equity", self.config["initial_capital"]) if state else self.config["initial_capital"]
         self.telegram.send_startup(self.config["mode"], equity)
 
-        self.logger.info("═══ STARTUP COMPLETE ═══")
+        self.logger.info("=== STARTUP COMPLETE ===")
+
+        # 7. Pre-market analysis (runs TradingAgents on all symbols if available)
+        self._pre_market_analysis()
+
+    # ══════════════════════════════════════════════════════════════
+    # PRE-MARKET ANALYSIS
+    # ══════════════════════════════════════════════════════════════
+
+    def _pre_market_analysis(self) -> None:
+        """
+        Run TradingAgents analysis on all monitored symbols at startup.
+
+        This provides initial conviction scores that are cached for the day.
+        If TA adapter is not available (TradingAgents not installed), this
+        is a no-op and signals will use default neutral conviction.
+        """
+        if not self.ta_adapter:
+            self.logger.info("Pre-market analysis: TA adapter not available, skipping")
+            return
+
+        symbols = self.config.get("symbols", [])
+        self.logger.info(f"Pre-market analysis: analyzing {len(symbols)} symbols via TradingAgents...")
+
+        for symbol in symbols:
+            try:
+                result = self.ta_adapter.analyze(symbol)
+                if result:
+                    conviction = result.get("conviction", 0.5)
+                    direction = result.get("direction", "HOLD")
+                    self.logger.info(
+                        f"  {symbol}: conviction={conviction:.2f} direction={direction}"
+                    )
+                    if _trading_events:
+                        _trading_events.ta_analysis_complete(symbol, conviction, direction)
+            except Exception as e:
+                self.logger.warning(f"  {symbol}: TA analysis failed: {e}")
+
+        self.logger.info("Pre-market analysis complete")
 
     # ══════════════════════════════════════════════════════════════
     # MAIN LOOP (candle-close-aligned)
@@ -395,10 +501,11 @@ class AutonomousTradingLoop:
             try:
                 # Sleep until next candle close
                 sleep_s = self.data_feed.seconds_until_next_candle_close("15m")
-                # Paper mode: fast loop (30s) for real-time demo
-                if self.config.get("mode") == "paper":
+                # Demo mode: fast loop (30s) for live demonstrations only
+                if self.config.get("demo_mode"):
                     sleep_s = 30
                 else:
+                    # Both paper and live use proper candle-close alignment
                     sleep_s = max(sleep_s, 5)  # Minimum 5 seconds
                     sleep_s = min(sleep_s, 900)  # Maximum 15 minutes
 
@@ -486,9 +593,15 @@ class AutonomousTradingLoop:
 
                 # Process signals through 16-gate OMS
                 for signal in signals:
+                    # Enrich signal with multi-source data
+                    signal = self._enrich_signal(signal, symbol, regime)
+
                     result = self.order_manager.process_signal(signal)
                     if result.get("status") == "EXECUTED":
                         self.logger.info(f"Trade executed: {symbol} {signal['direction']}")
+                        if _trading_events:
+                            _trading_events.signal_fired(signal)
+                            _trading_events.trade_executed(result)
 
             except Exception as e:
                 self.logger.error(f"Error processing {symbol}: {e}")
@@ -497,10 +610,31 @@ class AutonomousTradingLoop:
         """Tasks that run every hour."""
         try:
             # Incremental pattern update
-            for sym in self.config["symbols"][:3]:  # Top 3 symbols only
+            for sym in self.config["symbols"][:3]:
                 self.pattern_builder.update_incremental(sym, "15m")
         except Exception as e:
-            self.logger.error(f"Hourly task error: {e}")
+            self.logger.error(f"Hourly pattern update error: {e}")
+
+        # Equity snapshot for charting
+        try:
+            state = self.database.get_portfolio_state()
+            if state and self.database:
+                self.database.save_equity_snapshot({
+                    "timestamp": time.time(),
+                    "equity": state.get("equity", 0),
+                    "cash": state.get("cash", 0),
+                    "drawdown_pct": state.get("drawdown_pct", 0),
+                    "open_positions": state.get("open_positions_count", 0),
+                    "risk_mode": state.get("risk_mode", "NORMAL"),
+                })
+        except Exception as e:
+            self.logger.error(f"Equity snapshot error: {e}")
+
+        # Process closed trades through learning engine
+        try:
+            self._process_closed_trades_for_learning()
+        except Exception as e:
+            self.logger.error(f"Learning engine update error: {e}")
 
     def _daily_tasks(self) -> None:
         """Tasks that run at market close."""
@@ -510,7 +644,52 @@ class AutonomousTradingLoop:
             if state and stats:
                 self.telegram.send_daily_summary(state, stats)
         except Exception as e:
-            self.logger.error(f"Daily task error: {e}")
+            self.logger.error(f"Daily summary error: {e}")
+
+        # Generate daily HTML report
+        try:
+            if self.report_generator:
+                filepath = self.report_generator.generate_daily_report()
+                if filepath:
+                    self.logger.info(f"Daily report saved: {filepath}")
+                    # Send text summary via telegram
+                    summary = self.report_generator.get_report_summary_text()
+                    self.telegram.send_message(summary)
+        except Exception as e:
+            self.logger.error(f"Daily report error: {e}")
+
+        # Log learning insights
+        try:
+            if self.learning_engine:
+                insights = self.learning_engine.get_insights()
+                for insight in insights[:5]:
+                    self.logger.info(f"Learning insight: {insight}")
+        except Exception as e:
+            self.logger.error(f"Learning insights error: {e}")
+
+        # Log LLM budget status
+        try:
+            if self.llm_budget:
+                budget = self.llm_budget.get_budget_status()
+                self.logger.info(f"LLM budget: spent=${budget['daily_spent']:.4f}, remaining=${budget['daily_remaining']:.4f}")
+        except Exception as e:
+            self.logger.error(f"Budget status error: {e}")
+
+        # Check holdings near earnings and send Telegram alert
+        try:
+            if self.earnings_guard:
+                positions = self.database.get_positions()
+                held = [p.get("symbol", "") for p in positions if p.get("symbol")]
+                if held:
+                    at_risk = self.earnings_guard.alert_holdings_near_earnings(
+                        held, self.telegram
+                    )
+                    if at_risk:
+                        self.logger.warning(
+                            f"Earnings alert: {len(at_risk)} positions near earnings"
+                        )
+        except Exception as e:
+            self.logger.error(f"Earnings alert error: {e}")
 
     def _is_daily_close(self) -> bool:
         """Check if it's near US market close (4 PM ET)."""
@@ -552,7 +731,7 @@ class AutonomousTradingLoop:
 
     def get_status(self) -> Dict[str, Any]:
         """Get current system status."""
-        return {
+        status = {
             "running": self._thread.is_alive() if self._thread else False,
             "shutdown_requested": self._shutdown,
             "mode": self.config["mode"],
@@ -563,3 +742,90 @@ class AutonomousTradingLoop:
             "portfolio": self.database.get_portfolio_state() if self.database else {},
             "db_stats": self.database.get_db_stats() if self.database else {},
         }
+
+        # Add new engine statuses
+        if self.llm_budget:
+            status["llm_budget"] = self.llm_budget.get_budget_status()
+        if self.learning_engine:
+            status["learning_insights"] = self.learning_engine.get_insights()[:3]
+        if self.ta_adapter:
+            status["ta_available"] = self.ta_adapter.is_available
+
+        return status
+
+    # ══════════════════════════════════════════════════════════════
+    # SIGNAL ENRICHMENT
+    # ══════════════════════════════════════════════════════════════
+
+    def _enrich_signal(self, signal: Dict[str, Any], symbol: str, regime: str) -> Dict[str, Any]:
+        """
+        Enrich a raw strategy signal with:
+        1. TradingAgents conviction score
+        2. Learning Engine historical win rate
+        3. LLM Pre-Trade Reviewer advisory
+        """
+        direction = signal.get("direction", "LONG")
+        strategy = signal.get("strategy_name", "")
+
+        # 1. TradingAgents conviction
+        if self.ta_adapter and self.ta_adapter.is_available:
+            try:
+                ta_result = self.ta_adapter.analyze(symbol)
+                signal["ta_conviction"] = ta_result.get("conviction", 0.5)
+                signal["ta_direction"] = ta_result.get("direction", "HOLD")
+            except Exception as e:
+                self.logger.debug(f"TA enrichment failed: {e}")
+
+        # 2. Historical win rate from Learning Engine
+        if self.learning_engine:
+            try:
+                win_rate = self.learning_engine.get_historical_win_rate(strategy, regime)
+                signal["historical_win_rate"] = win_rate
+            except Exception as e:
+                self.logger.debug(f"Learning engine lookup failed: {e}")
+
+        # 3. LLM Pre-Trade Reviewer (advisory only)
+        if self.llm_reviewer:
+            try:
+                review = self.llm_reviewer.review(
+                    signal,
+                    ta_reports=self.ta_adapter.get_cached_analysis(symbol) if self.ta_adapter else None
+                )
+                if not review.get("skipped") and review.get("adjustment", 0) != 0:
+                    old_conf = signal.get("confidence", 0.5)
+                    signal["confidence"] = max(0, old_conf + review["adjustment"])
+                    signal["llm_review"] = review.get("review_text", "")
+                    self.logger.info(
+                        f"LLM reviewer adjusted confidence: {old_conf:.2f} → {signal['confidence']:.2f}"
+                    )
+            except Exception as e:
+                self.logger.debug(f"LLM review failed: {e}")
+
+        return signal
+
+    def _process_closed_trades_for_learning(self) -> None:
+        """Check for recently closed trades and feed them to the learning engine."""
+        if not self.learning_engine or not self.database:
+            return
+
+        trades = self.database.get_trade_history(limit=10)
+        already_learned = set()
+
+        # Get existing lessons to avoid duplicates
+        existing_lessons = self.database.get_trade_lessons(limit=100)
+        for lesson in existing_lessons:
+            already_learned.add(lesson.get("trade_id", ""))
+
+        for trade in trades:
+            trade_id = trade.get("trade_id", "")
+            if trade_id and trade_id not in already_learned:
+                try:
+                    self.learning_engine.record_outcome(trade)
+                    # Clear active position in StrategyEngine so new signals can fire
+                    symbol = trade.get("symbol", "")
+                    if symbol and self.strategy_engine:
+                        self.strategy_engine.clear_active_position(symbol)
+                    if _trading_events:
+                        _trading_events.trade_closed(trade)
+                except Exception as e:
+                    self.logger.error(f"Failed to record outcome for {trade_id}: {e}")

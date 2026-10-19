@@ -1,0 +1,87 @@
+{
+  "symbol": "AAPL",
+  "timestamp": "20261017_223052",
+  "strategies": {
+    "trend_following": {
+      "trades": 7,
+      "metrics": {
+        "total_return_pct": -6.74,
+        "cagr": -91.89,
+        "sharpe_ratio": -0.96,
+        "sortino_ratio": -1.319,
+        "max_drawdown": 13.39,
+        "calmar_ratio": -6.862,
+        "ulcer_index": 7.4431,
+        "recovery_factor": -0.503,
+        "win_rate": 28.57,
+        "profit_factor": 0.751,
+        "avg_win_pct": 8.4882,
+        "avg_loss_pct": 4.5185,
+        "total_trades": 7
+      },
+      "regime_breakdown": {
+        "EXPANSION_BREAKOUT": {
+          "trade_count": 2,
+          "win_rate": 0.0,
+          "avg_return": -0.044289,
+          "total_return": -0.088578,
+          "best_trade": -0.032857,
+          "worst_trade": -0.055721
+        },
+        "TRENDING_VOLATILE": {
+          "trade_count": 5,
+          "win_rate": 0.4,
+          "avg_return": 0.006483,
+          "total_return": 0.032417,
+          "best_trade": 0.125307,
+          "worst_trade": -0.047925
+        }
+      },
+      "walk_forward": {
+        "status": "INSUFFICIENT_DATA",
+        "folds": []
+      }
+    },
+    "mean_reversion": {
+      "trades": 0,
+      "metrics": {},
+      "regime_breakdown": {},
+      "walk_forward": {
+        "status": "INSUFFICIENT_DATA",
+        "folds": []
+      }
+    },
+    "breakout": {
+      "trades": 3,
+      "metrics": {
+        "total_return_pct": -5.28,
+        "cagr": -98.95,
+        "sharpe_ratio": -11.384,
+        "sortino_ratio": -3.449,
+        "max_drawdown": 5.28,
+        "calmar_ratio": -18.726,
+        "ulcer_index": 3.4224,
+        "recovery_factor": -1.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "avg_win_pct": 0.0,
+        "avg_loss_pct": 1.7918,
+        "total_trades": 3
+      },
+      "regime_breakdown": {
+        "EXPANSION_BREAKOUT": {
+          "trade_count": 3,
+          "win_rate": 0.0,
+          "avg_return": -0.017918,
+          "total_return": -0.053753,
+          "best_trade": -0.010984,
+          "worst_trade": -0.024938
+        }
+      },
+      "walk_forward": {
+        "status": "INSUFFICIENT_DATA",
+        "folds": []
+      }
+    }
+  }
+}

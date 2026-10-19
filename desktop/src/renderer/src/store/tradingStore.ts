@@ -111,6 +111,54 @@ export interface IndicatorData {
     } | null;
 }
 
+export interface EquityPoint {
+    timestamp: number;
+    equity: number;
+    cash: number;
+    drawdown_pct: number;
+}
+
+export interface JournalEntry {
+    trade_id: string;
+    symbol: string;
+    direction: string;
+    strategy_name: string;
+    entry_price: number;
+    exit_price: number;
+    net_pnl: number;
+    pnl_pct: number;
+    confidence: number;
+    regime: string;
+    exit_reason: string;
+    closed_at: number;
+    ta_conviction?: number;
+    ml_agreed?: boolean;
+    llm_review?: string;
+}
+
+export interface StrategyRegimeStat {
+    strategy: string;
+    regime: string;
+    total_trades: number;
+    wins: number;
+    losses: number;
+    avg_pnl: number;
+}
+
+export interface IntelligenceBreakdown {
+    scores: Record<string, number>;
+    weights: Record<string, number>;
+    confidence: number;
+    action: string;
+    direction: string;
+}
+
+export interface LLMBudgetState {
+    daily_limit: number;
+    daily_spent: number;
+    daily_remaining: number;
+}
+
 // ══════════════════════════════════════════════════════════════
 // STORE
 // ══════════════════════════════════════════════════════════════
@@ -139,6 +187,14 @@ export interface TradingState {
     riskState: RiskState | null;
     systemStatus: SystemStatus | null;
 
+    // Intelligence
+    equityCurve: EquityPoint[];
+    journal: JournalEntry[];
+    strategyStats: StrategyRegimeStat[];
+    intelligence: IntelligenceBreakdown | null;
+    llmBudget: LLMBudgetState | null;
+    insights: string[];
+
     // Connection
     wsConnected: boolean;
     lastUpdate: number;
@@ -152,6 +208,11 @@ export interface TradingState {
     fetchAll: () => Promise<void>;
     fetchCandles: () => Promise<void>;
     fetchIndicators: () => Promise<void>;
+    fetchEquityCurve: () => Promise<void>;
+    fetchJournal: () => Promise<void>;
+    fetchStrategyStats: () => Promise<void>;
+    fetchInsights: () => Promise<void>;
+    fetchLLMBudget: () => Promise<void>;
     connectWebSocket: () => void;
     disconnectWebSocket: () => void;
 }
@@ -180,6 +241,13 @@ export const useTradingStore = create<TradingState>((set, get) => ({
 
     riskState: null,
     systemStatus: null,
+
+    equityCurve: [],
+    journal: [],
+    strategyStats: [],
+    intelligence: null,
+    llmBudget: null,
+    insights: [],
 
     wsConnected: false,
     lastUpdate: 0,
@@ -333,6 +401,66 @@ export const useTradingStore = create<TradingState>((set, get) => ({
         }
     },
 
+    fetchEquityCurve: async () => {
+        try {
+            const res = await fetch(`${API}/api/trading/equity-curve?limit=500`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ equityCurve: data.data || [] });
+            }
+        } catch (e) {
+            console.error('Failed to fetch equity curve:', e);
+        }
+    },
+
+    fetchJournal: async () => {
+        try {
+            const res = await fetch(`${API}/api/trading/trades?limit=200`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ journal: data.trades || [] });
+            }
+        } catch (e) {
+            console.error('Failed to fetch journal:', e);
+        }
+    },
+
+    fetchStrategyStats: async () => {
+        try {
+            const res = await fetch(`${API}/api/trading/strategy-stats`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ strategyStats: data.stats || [] });
+            }
+        } catch (e) {
+            console.error('Failed to fetch strategy stats:', e);
+        }
+    },
+
+    fetchInsights: async () => {
+        try {
+            const res = await fetch(`${API}/api/trading/insights`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ insights: data.insights || [] });
+            }
+        } catch (e) {
+            console.error('Failed to fetch insights:', e);
+        }
+    },
+
+    fetchLLMBudget: async () => {
+        try {
+            const res = await fetch(`${API}/api/trading/llm-budget`);
+            if (res.ok) {
+                const data = await res.json();
+                set({ llmBudget: data.budget || null });
+            }
+        } catch (e) {
+            console.error('Failed to fetch LLM budget:', e);
+        }
+    },
+
     connectWebSocket: () => {
         if (wsInstance) return;
 
@@ -365,6 +493,41 @@ export const useTradingStore = create<TradingState>((set, get) => ({
                         riskState: data.data.risk,
                         lastUpdate: Date.now(),
                     });
+
+                    // Process trading events and auto-refresh relevant slices
+                    const events = data.data.events || [];
+                    if (events.length > 0) {
+                        let refreshEquity = false;
+                        let refreshJournal = false;
+                        let refreshStats = false;
+                        let refreshInsights = false;
+
+                        for (const evt of events) {
+                            switch (evt.type) {
+                                case 'trading:trade_closed':
+                                    refreshJournal = true;
+                                    refreshStats = true;
+                                    refreshEquity = true;
+                                    break;
+                                case 'trading:portfolio_update':
+                                    refreshEquity = true;
+                                    break;
+                                case 'trading:learning_insight':
+                                    refreshInsights = true;
+                                    break;
+                                case 'trading:risk_mode_change':
+                                case 'trading:signal_fired':
+                                case 'trading:trade_executed':
+                                case 'trading:ta_analysis_complete':
+                                    break;
+                            }
+                        }
+
+                        if (refreshEquity) get().fetchEquityCurve();
+                        if (refreshJournal) get().fetchJournal();
+                        if (refreshStats) get().fetchStrategyStats();
+                        if (refreshInsights) get().fetchInsights();
+                    }
                 }
             } catch (e) {
                 console.error('Failed to parse WebSocket message', e);

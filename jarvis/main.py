@@ -1,5 +1,5 @@
 """
-INDRA Main Entry Point — Orchestrator and main voice loop.
+INDRA Main Entry Point -- Orchestrator and main voice loop.
 """
 
 import sys
@@ -60,21 +60,22 @@ executor = None
 injection_guard = None
 keyboard_sys = None
 wake_detector = None
+eyes = None
 conv_logger = None
 
 
 def _extract_app_name(text: str) -> str | None:
     """
     Extract just the application name from a command like:
-      "Open Telegram and send hi" → "telegram"
-      "Open Chrome" → "chrome"
-      "Launch VS Code" → "vs code"
+      "Open Telegram and send hi" -> "telegram"
+      "Open Chrome" -> "chrome"
+      "Launch VS Code" -> "vs code"
     Returns None if no app name can be extracted.
     """
     import re
     text_lower = text.lower().strip().rstrip(".")
     
-    # Match "open/launch/start X" — stop at "and", "then", comma, period
+    # Match "open/launch/start X" -- stop at "and", "then", comma, period
     match = re.match(
         r'^(?:open|launch|start|run)\s+(.+?)(?:\s+and\s+|\s+then\s+|,|\.|$)',
         text_lower
@@ -86,8 +87,8 @@ def _extract_app_name(text: str) -> str | None:
 def _is_simple_launch(text: str) -> bool:
     """
     Check if this is ONLY an app launch (no further actions).
-    "Open Chrome" → True
-    "Open Telegram and send hi to Ashish" → False
+    "Open Chrome" -> True
+    "Open Telegram and send hi to Ashish" -> False
     """
     text_lower = text.lower().strip().rstrip(".")
     multi_step_markers = [" and ", " then ", " send ", " type ", " write ", 
@@ -101,7 +102,7 @@ def _is_simple_launch(text: str) -> bool:
 def try_direct_launch(text: str) -> bool:
     """
     Try to launch an application directly (no AI needed).
-    ONLY handles simple "Open X" commands — NOT multi-step tasks.
+    ONLY handles simple "Open X" commands -- NOT multi-step tasks.
     """
     import subprocess
     
@@ -150,7 +151,7 @@ def try_direct_launch(text: str) -> bool:
         except Exception as e:
             logger.warning(f"[DirectLaunch] Failed to open '{exe}': {e}")
     
-    # Fallback: Start Menu search — ONLY the app name, not the whole command
+    # Fallback: Start Menu search -- ONLY the app name, not the whole command
     try:
         import pyautogui
         pyautogui.hotkey('win')
@@ -168,9 +169,9 @@ def try_direct_launch(text: str) -> bool:
 
 def handle_wake():
     """Called when wake word is detected."""
-    logger.info("Wake word handled — listening for command")
+    logger.info("Wake word handled -- listening for command")
     
-    # ── VISUAL FEEDBACK ONLY — no speech (causes mic feedback!) ──
+    # -- VISUAL FEEDBACK ONLY -- no speech (causes mic feedback!) --
     # Edge lights turn cyan, chime already played by wake_word.py
     try:
         api.broadcast_state("listening")
@@ -203,7 +204,7 @@ def handle_wake():
     if conv_logger:
         conv_logger.log_user(text)
     
-    # ── SECURITY SCAN ──
+    # -- SECURITY SCAN --
     # Not strictly required for voice input unless Ashish is dictating a malicious string,
     # but good practice.
     is_safe = injection_guard.scan(text, source="voice")
@@ -211,7 +212,7 @@ def handle_wake():
         speaker.enqueue("I've detected a prohibited instruction sequence. Ignoring.", priority=True)
         return
         
-    # ── CLASSIFY & ROUTE ──
+    # -- CLASSIFY & ROUTE --
     with latency.measure("router", target_ms=100):
         intent_type = router.classify(text)
         
@@ -244,9 +245,9 @@ def handle_wake():
         # Given the scope, treating TYPE2 exactly like TYPE1 for now (conversation only).
         
     elif intent_type == "TYPE3":
-        # Computer Task — smart routing
+        # Computer Task -- smart routing
         if _is_simple_launch(text):
-            # Simple "Open Chrome" — just launch it directly
+            # Simple "Open Chrome" -- just launch it directly
             launched = try_direct_launch(text)
             if not launched:
                 threading.Thread(target=executor.run_task, args=(text,), daemon=True).start()
@@ -287,7 +288,7 @@ def handle_wake():
 
 def emergency_stop():
     """F9 Emergency Stop."""
-    logger.warning("[EMERGENCY] F9 pressed — full stop initiated")
+    logger.warning("[EMERGENCY] F9 pressed -- full stop initiated")
     if executor:
         executor.stop()
     if speaker:
@@ -309,7 +310,7 @@ def emergency_stop():
 
 def startup():
     """Full INDRA initialization sequence."""
-    global memory, projects, speaker, chat_brain, ears, router
+    global memory, projects, speaker, chat_brain, ears, router, eyes
     global executor, injection_guard, keyboard_sys, wake_detector, conv_logger
     
     logger.info("==================================================")
@@ -321,7 +322,7 @@ def startup():
         HAS_KEYBOARD_LIB = True
     except ImportError:
         HAS_KEYBOARD_LIB = False
-        logger.warning("keyboard library not installed — F9 hotkey unavailable")
+        logger.warning("keyboard library not installed -- F9 hotkey unavailable")
     
     # 1. Initialize core subsystems
     memory = MemoryStore()
@@ -386,13 +387,99 @@ def startup():
     api.init_conv_logger(conv_logger)
     api.start_api_server_in_thread(port=8001)
     
-    # 8. Start listening
+    # 8. Boot INDRA OS Agent Framework
+    _boot_agent_framework(chat_brain, speaker, vision_brain)
+    
+    # 9. Start listening
     wake_detector.start()
     
     logger.info("==================================================")
     logger.info("  INDRA Ready. Say 'Hey INDRA' to begin.")
     logger.info("  API Bridge listening on port 8001.")
+    logger.info("  Agent Framework: 7 agents online.")
     logger.info("==================================================")
+
+
+# Global agent framework references
+_indra_orchestrator = None
+_indra_registry = None
+_indra_bus = None
+_indra_emotional = None
+_indra_memory_mgr = None
+
+def _boot_agent_framework(chat_brain_instance, speaker_instance, vision_brain_instance):
+    """Boot the INDRA OS multi-agent framework in a background thread."""
+    global _indra_orchestrator, _indra_registry, _indra_bus, _indra_emotional, _indra_memory_mgr
+    
+    import asyncio
+    
+    async def _llm_func(prompt: str) -> str:
+        """Bridge to existing ChatBrain for LLM calls."""
+        try:
+            import ollama
+            from config import CHAT_MODEL
+            response = ollama.chat(
+                model=CHAT_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response["message"]["content"]
+        except Exception as e:
+            logger.error(f"Agent LLM call failed: {e}")
+            return f"Error: {e}"
+    
+    def _speak_func(text: str):
+        """Bridge to existing Speaker for TTS."""
+        if speaker_instance:
+            speaker_instance.enqueue(text)
+    
+    async def _vision_func(prompt: str, screenshot_b64: str) -> str:
+        """Bridge to existing VisionBrain."""
+        try:
+            if vision_brain_instance:
+                return vision_brain_instance.analyze(prompt, screenshot_b64)
+        except Exception as e:
+            logger.error(f"Agent vision call failed: {e}")
+        return ""
+    
+    def _boot_thread():
+        global _indra_orchestrator, _indra_registry, _indra_bus, _indra_emotional, _indra_memory_mgr
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from agents.startup import start_indra_os
+            
+            result = loop.run_until_complete(
+                start_indra_os(
+                    llm_func=_llm_func,
+                    speak_func=_speak_func,
+                    vision_func=_vision_func,
+                )
+            )
+            
+            _indra_orchestrator, _indra_registry, _indra_bus, _indra_emotional, _indra_memory_mgr = result
+            
+            # Register with API for dashboard
+            api.init_agent_framework(
+                _indra_orchestrator,
+                _indra_registry,
+                _indra_bus,
+                _indra_emotional,
+            )
+            
+            logger.info("INDRA OS Agent Framework booted successfully")
+            
+            # Keep the event loop alive for async agents
+            loop.run_forever()
+            
+        except Exception as e:
+            logger.error(f"Agent framework boot failed: {e}", exc_info=True)
+    
+    thread = threading.Thread(target=_boot_thread, daemon=True, name="indra-agents")
+    thread.start()
+    logger.info("Agent framework boot started in background")
 
 
 if __name__ == "__main__":
@@ -407,9 +494,14 @@ if __name__ == "__main__":
         logger.info("INDRA shutting down gracefully")
         if wake_detector:
             wake_detector.stop()
-        if eyes:
+        if 'eyes' in dir() and eyes:
             eyes.stop()
         if speaker:
             speaker.stop()
         if memory:
             memory.save_session_summary()
+        # Save agent memory
+        if _indra_memory_mgr:
+            _indra_memory_mgr.save_all()
+            logger.info("Agent memory saved")
+

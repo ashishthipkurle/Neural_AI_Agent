@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, dialog, globalShortcut } from 'electron'
 import { join } from 'path'
 // import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
@@ -32,8 +32,34 @@ process.on('uncaughtException', (error: Error) => {
 
 
 let mainWindow: BrowserWindow | null = null
+let overlayWindow: BrowserWindow | null = null
 const ptyManager = new PtyManager()
 const terminalServer = new TerminalWebSocketServer(8765)
+
+function createOverlayWindow(): void {
+    overlayWindow = new BrowserWindow({
+        width: 300,
+        height: 300,
+        transparent: true,
+        frame: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        hasShadow: false,
+        show: false, // Start hidden
+        webPreferences: {
+            preload: join(__dirname, '../preload/index.js'),
+            sandbox: false,
+            contextIsolation: true,
+            nodeIntegration: false,
+        }
+    });
+
+    if (process.env['ELECTRON_RENDERER_URL']) {
+        overlayWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#/overlay`);
+    } else {
+        overlayWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'overlay' });
+    }
+}
 
 function createWindow(): void {
     // Create the browser window.
@@ -151,6 +177,19 @@ app.whenReady().then(() => {
     terminalServer.start()
 
     createWindow()
+    createOverlayWindow()
+
+    globalShortcut.register('Alt+Space', () => {
+        if (overlayWindow) {
+            if (overlayWindow.isVisible()) {
+                overlayWindow.hide()
+            } else {
+                // optional: send event to wake agent
+                overlayWindow.show()
+                overlayWindow.focus()
+            }
+        }
+    })
 
     // NEW: Python Sync WebSocket Bridge
     function connectToPythonSync() {
@@ -165,8 +204,10 @@ app.whenReady().then(() => {
         ws.on('message', (data: Buffer) => {
             try {
                 const event = JSON.parse(data.toString());
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('agent:sync', event);
+                for (const win of BrowserWindow.getAllWindows()) {
+                    if (!win.isDestroyed()) {
+                        win.webContents.send('agent:sync', event);
+                    }
                 }
             } catch (e) {
                 console.error('Failed to parse sync event:', e);
@@ -201,6 +242,7 @@ app.whenReady().then(() => {
     })
 
     app.on('before-quit', () => {
+        globalShortcut.unregisterAll()
         ptyManager.disposeAll()
         terminalServer.stop()
         cleanupAllSessions()

@@ -199,6 +199,89 @@ class TradingDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_signals_state
                 ON signals_archive (state);
+
+            -- Per-trade outcome with full context (for Learning Engine)
+            CREATE TABLE IF NOT EXISTS trade_lessons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                regime TEXT NOT NULL,
+                confidence_bucket TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL,
+                exit_price REAL,
+                pnl_pct REAL,
+                pnl_dollars REAL,
+                win INTEGER,
+                sentiment_score REAL,
+                ta_conviction REAL,
+                ta_direction TEXT,
+                ml_agreed INTEGER,
+                holding_period_bars INTEGER,
+                exit_reason TEXT,
+                risk_mode_at_entry TEXT,
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_trade_lessons_strategy_regime
+                ON trade_lessons (strategy, regime);
+
+            -- Aggregated stats per strategy x regime (for fast lookup)
+            CREATE TABLE IF NOT EXISTS strategy_regime_stats (
+                strategy TEXT NOT NULL,
+                regime TEXT NOT NULL,
+                total_trades INTEGER DEFAULT 0,
+                wins INTEGER DEFAULT 0,
+                losses INTEGER DEFAULT 0,
+                avg_pnl REAL DEFAULT 0.0,
+                avg_confidence REAL DEFAULT 0.0,
+                avg_holding_bars REAL DEFAULT 0.0,
+                best_pnl REAL DEFAULT 0.0,
+                worst_pnl REAL DEFAULT 0.0,
+                last_updated REAL,
+                PRIMARY KEY (strategy, regime)
+            );
+
+            -- Equity curve snapshots (for charting)
+            CREATE TABLE IF NOT EXISTS equity_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                equity REAL NOT NULL,
+                cash REAL NOT NULL,
+                drawdown_pct REAL DEFAULT 0.0,
+                open_positions INTEGER DEFAULT 0,
+                risk_mode TEXT DEFAULT 'NORMAL',
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_equity_snapshots_ts
+                ON equity_snapshots (timestamp DESC);
+
+            -- TradingAgents analysis cache
+            CREATE TABLE IF NOT EXISTS ta_analysis_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                analysis_date TEXT NOT NULL,
+                conviction REAL,
+                direction TEXT,
+                analyst_reports TEXT,
+                debate_summary TEXT,
+                cost_usd REAL DEFAULT 0.0,
+                created_at REAL DEFAULT (strftime('%s', 'now')),
+                UNIQUE(symbol, analysis_date)
+            );
+
+            -- LLM spend tracking
+            CREATE TABLE IF NOT EXISTS llm_spend (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                symbol TEXT,
+                cost_usd REAL NOT NULL,
+                provider TEXT DEFAULT 'ollama',
+                operation TEXT DEFAULT 'analysis',
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_llm_spend_date
+                ON llm_spend (date);
         """)
 
         self.conn.commit()
@@ -619,3 +702,209 @@ class TradingDatabase:
         if self.conn:
             self.conn.close()
             self.logger.info("Database connection closed.")
+
+    # ══════════════════════════════════════════════════════════════
+    # TRADE LESSONS (Learning Engine)
+    # ══════════════════════════════════════════════════════════════
+
+    def save_trade_lesson(self, lesson: Dict[str, Any]) -> None:
+        """Record a trade outcome for the learning engine."""
+        self.conn.execute(
+            """INSERT INTO trade_lessons
+               (trade_id, strategy, regime, confidence_bucket, symbol, direction,
+                entry_price, exit_price, pnl_pct, pnl_dollars, win,
+                sentiment_score, ta_conviction, ta_direction, ml_agreed,
+                holding_period_bars, exit_reason, risk_mode_at_entry)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                lesson.get("trade_id", ""),
+                lesson.get("strategy", ""),
+                lesson.get("regime", ""),
+                lesson.get("confidence_bucket", "MED"),
+                lesson.get("symbol", ""),
+                lesson.get("direction", ""),
+                lesson.get("entry_price", 0.0),
+                lesson.get("exit_price", 0.0),
+                lesson.get("pnl_pct", 0.0),
+                lesson.get("pnl_dollars", 0.0),
+                1 if lesson.get("pnl_pct", 0) > 0 else 0,
+                lesson.get("sentiment_score"),
+                lesson.get("ta_conviction"),
+                lesson.get("ta_direction"),
+                lesson.get("ml_agreed"),
+                lesson.get("holding_period_bars"),
+                lesson.get("exit_reason", ""),
+                lesson.get("risk_mode_at_entry", "NORMAL"),
+            ),
+        )
+        self.conn.commit()
+
+    def get_trade_lessons(
+        self, strategy: str = None, regime: str = None, limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        """Get trade lessons, optionally filtered by strategy and/or regime."""
+        query = "SELECT * FROM trade_lessons WHERE 1=1"
+        params = []
+        if strategy:
+            query += " AND strategy = ?"
+            params.append(strategy)
+        if regime:
+            query += " AND regime = ?"
+            params.append(regime)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+
+        cursor = self.conn.cursor()
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    # ══════════════════════════════════════════════════════════════
+    # STRATEGY REGIME STATS
+    # ══════════════════════════════════════════════════════════════
+
+    def save_strategy_regime_stat(self, stat: Dict[str, Any]) -> None:
+        """Upsert aggregated stats for a strategy×regime combination."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO strategy_regime_stats
+               (strategy, regime, total_trades, wins, losses,
+                avg_pnl, avg_confidence, avg_holding_bars,
+                best_pnl, worst_pnl, last_updated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                stat["strategy"],
+                stat["regime"],
+                stat.get("total_trades", 0),
+                stat.get("wins", 0),
+                stat.get("losses", 0),
+                stat.get("avg_pnl", 0.0),
+                stat.get("avg_confidence", 0.0),
+                stat.get("avg_holding_bars", 0.0),
+                stat.get("best_pnl", 0.0),
+                stat.get("worst_pnl", 0.0),
+                time.time(),
+            ),
+        )
+        self.conn.commit()
+
+    def get_strategy_regime_stats(self) -> List[Dict[str, Any]]:
+        """Get all strategy×regime aggregated stats."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM strategy_regime_stats ORDER BY strategy, regime")
+        return [dict(row) for row in cursor.fetchall()]
+
+    # ══════════════════════════════════════════════════════════════
+    # EQUITY SNAPSHOTS
+    # ══════════════════════════════════════════════════════════════
+
+    def save_equity_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        """Save a point-in-time equity snapshot for charting."""
+        self.conn.execute(
+            """INSERT INTO equity_snapshots
+               (timestamp, equity, cash, drawdown_pct, open_positions, risk_mode)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                snapshot.get("timestamp", time.time()),
+                snapshot.get("equity", 0.0),
+                snapshot.get("cash", 0.0),
+                snapshot.get("drawdown_pct", 0.0),
+                snapshot.get("open_positions", 0),
+                snapshot.get("risk_mode", "NORMAL"),
+            ),
+        )
+        self.conn.commit()
+
+    def get_equity_curve(
+        self, start: float = None, end: float = None, limit: int = 1000
+    ) -> List[Dict[str, Any]]:
+        """Get equity curve snapshots within a time range."""
+        query = "SELECT * FROM equity_snapshots WHERE 1=1"
+        params = []
+        if start:
+            query += " AND timestamp >= ?"
+            params.append(start)
+        if end:
+            query += " AND timestamp <= ?"
+            params.append(end)
+        query += " ORDER BY timestamp ASC LIMIT ?"
+        params.append(limit)
+
+        cursor = self.conn.cursor()
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    # ══════════════════════════════════════════════════════════════
+    # TA ANALYSIS CACHE
+    # ══════════════════════════════════════════════════════════════
+
+    def save_ta_cache(
+        self, symbol: str, analysis_date: str, data: Dict[str, Any]
+    ) -> None:
+        """Cache TradingAgents analysis result."""
+        import json as _json
+        self.conn.execute(
+            """INSERT OR REPLACE INTO ta_analysis_cache
+               (symbol, analysis_date, conviction, direction,
+                analyst_reports, debate_summary, cost_usd)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                symbol,
+                analysis_date,
+                data.get("conviction", 0.5),
+                data.get("direction", "HOLD"),
+                _json.dumps(data.get("analyst_reports", {})),
+                data.get("debate_summary", ""),
+                data.get("cost_usd", 0.0),
+            ),
+        )
+        self.conn.commit()
+
+    def get_ta_cache(
+        self, symbol: str, analysis_date: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get cached TradingAgents analysis for a symbol and date."""
+        import json as _json
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM ta_analysis_cache WHERE symbol = ? AND analysis_date = ?",
+            (symbol, analysis_date),
+        )
+        row = cursor.fetchone()
+        if row:
+            result = dict(row)
+            # Parse JSON fields
+            try:
+                result["analyst_reports"] = _json.loads(result.get("analyst_reports", "{}"))
+            except Exception:
+                result["analyst_reports"] = {}
+            return result
+        return None
+
+    # ══════════════════════════════════════════════════════════════
+    # LLM SPEND TRACKING
+    # ══════════════════════════════════════════════════════════════
+
+    def record_llm_spend(
+        self, cost_usd: float, symbol: str = "",
+        provider: str = "ollama", operation: str = "analysis"
+    ) -> None:
+        """Record an LLM API cost."""
+        from datetime import datetime, timezone
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.conn.execute(
+            """INSERT INTO llm_spend (date, symbol, cost_usd, provider, operation)
+               VALUES (?, ?, ?, ?, ?)""",
+            (date_str, symbol, cost_usd, provider, operation),
+        )
+        self.conn.commit()
+
+    def get_daily_llm_spend(self, date_str: str = None) -> float:
+        """Get total LLM spend for a given date (default: today)."""
+        if not date_str:
+            from datetime import datetime, timezone
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM llm_spend WHERE date = ?",
+            (date_str,),
+        )
+        return cursor.fetchone()["total"]

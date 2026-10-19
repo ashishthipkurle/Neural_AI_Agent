@@ -1,5 +1,5 @@
 """
-INDRA Memory Loader — Loads memory at startup.
+INDRA Memory Loader -- Loads memory at startup.
 """
 
 from memory.store import MemoryStore

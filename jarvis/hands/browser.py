@@ -1,5 +1,5 @@
 """
-INDRA Browser Control — Playwright browser automation (headful Chromium).
+INDRA Browser Control -- Playwright browser automation (headful Chromium).
 """
 
 import sys
@@ -17,7 +17,7 @@ try:
     HAS_PLAYWRIGHT = True
 except ImportError:
     HAS_PLAYWRIGHT = False
-    logger.warning("playwright not installed — browser automation unavailable")
+    logger.warning("playwright not installed -- browser automation unavailable")
 
 
 class Browser:

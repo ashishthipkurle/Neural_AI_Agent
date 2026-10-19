@@ -1,5 +1,5 @@
 """
-INDRA Executor — The core SEE→THINK→ACT loop.
+INDRA Executor -- The core SEE->THINK->ACT loop.
 Narrates via speaker.enqueue() (non-blocking) while continuing to execute.
 INDRA speaks and acts simultaneously.
 """
@@ -35,7 +35,7 @@ class Executor:
         self._running = True
         logger.info(f"Starting task: {task_description}")
 
-        # Only speak ONCE at start — then stay silent until done
+        # Only speak ONCE at start -- then stay silent until done
         self.speaker.enqueue("On it, sir.")
 
         step_count = 0
@@ -69,7 +69,7 @@ class Executor:
                 logger.info(f"[Step {step_count}] Vision returned: action={action.get('next_action')}, "
                            f"target={action.get('target')}, coords={action.get('coordinates')}")
 
-                # 3. Log narration silently — NEVER speak during execution
+                # 3. Log narration silently -- NEVER speak during execution
                 narration = action.get("narration")
                 if narration:
                     logger.info(f"[Vision] {narration}")
@@ -129,7 +129,7 @@ class Executor:
             x = max(0, min(int(coords[0]), screen_w - 1))
             y = max(0, min(int(coords[1]), screen_h - 1))
             if x != int(coords[0]) or y != int(coords[1]):
-                logger.warning(f"[Coords] Clamped ({coords[0]}, {coords[1]}) → ({x}, {y}) [screen: {screen_w}x{screen_h}]")
+                logger.warning(f"[Coords] Clamped ({coords[0]}, {coords[1]}) -> ({x}, {y}) [screen: {screen_w}x{screen_h}]")
             return [x, y]
         except Exception:
             return [int(coords[0]), int(coords[1])]
@@ -147,12 +147,12 @@ class Executor:
         logger.info(f"[Execute] {action_type} | target='{target}' | value='{value}' | coords={coords}")
 
         try:
-            # ── CLICK ──
+            # -- CLICK --
             if action_type == "click":
                 # Try accessibility tree first (most reliable)
                 if target:
                     if self.accessibility.click_element_by_name(target):
-                        logger.info(f"[Execute] ✓ Clicked via accessibility: '{target}'")
+                        logger.info(f"[Execute] [OK] Clicked via accessibility: '{target}'")
                         return True
                     else:
                         logger.info(f"[Execute] Accessibility miss for '{target}', trying coords")
@@ -160,33 +160,33 @@ class Executor:
                 # Fall back to scaled coordinates
                 if coords and len(coords) == 2:
                     self.mouse.click(coords[0], coords[1])
-                    logger.info(f"[Execute] ✓ Clicked at ({coords[0]}, {coords[1]})")
+                    logger.info(f"[Execute] [OK] Clicked at ({coords[0]}, {coords[1]})")
                     return True
-                logger.warning(f"[Execute] ✗ Click failed — no coords and no accessibility match")
+                logger.warning(f"[Execute] [FAIL] Click failed -- no coords and no accessibility match")
                 return False
 
-            # ── DOUBLE CLICK ──
+            # -- DOUBLE CLICK --
             elif action_type == "double_click":
                 if coords and len(coords) == 2:
                     self.mouse.double_click(coords[0], coords[1])
                     return True
                 return False
 
-            # ── RIGHT CLICK ──
+            # -- RIGHT CLICK --
             elif action_type == "right_click":
                 if coords and len(coords) == 2:
                     self.mouse.right_click(coords[0], coords[1])
                     return True
                 return False
 
-            # ── TYPE ──
+            # -- TYPE --
             elif action_type == "type":
                 if not value:
                     return False
                 self.keyboard.type_text(str(value))
                 return True
 
-            # ── SCROLL ──
+            # -- SCROLL --
             elif action_type == "scroll":
                 amount = 3
                 try:
@@ -197,14 +197,14 @@ class Executor:
                 self.mouse.scroll("down" if amount > 0 else "up", abs(amount))
                 return True
 
-            # ── NAVIGATE ──
+            # -- NAVIGATE --
             elif action_type == "navigate":
                 if not value:
                     return False
                 self.browser.open_url(str(value))
                 return True
 
-            # ── HOTKEY ──
+            # -- HOTKEY --
             elif action_type == "hotkey":
                 if not value:
                     return False
@@ -212,7 +212,7 @@ class Executor:
                 self.keyboard.hotkey(*keys)
                 return True
 
-            # ── WAIT ──
+            # -- WAIT --
             elif action_type == "wait":
                 duration = 1.0
                 try:

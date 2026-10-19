@@ -1,5 +1,5 @@
 """
-INDRA Error Handler — Retry logic with 3-strategy escalation and stuck detection.
+INDRA Error Handler -- Retry logic with 3-strategy escalation and stuck detection.
 """
 
 import time
@@ -33,7 +33,7 @@ class ErrorHandler:
         
         Args:
             action: The action dict from vision brain
-            execute_fn: Function that executes an action dict → bool
+            execute_fn: Function that executes an action dict -> bool
             attempt: Current attempt number
             
         Returns: True if any strategy succeeded.
@@ -45,7 +45,7 @@ class ErrorHandler:
         target = action.get("target", "")
         action_type = action.get("next_action", "")
 
-        logger.info(f"Retry strategy {attempt}/{MAX_RETRIES} for: {action_type} → {target}")
+        logger.info(f"Retry strategy {attempt}/{MAX_RETRIES} for: {action_type} -> {target}")
 
         # Strategy 1: Simple retry with a short wait (timing issue)
         if attempt == 1:

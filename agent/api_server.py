@@ -12,6 +12,14 @@ import asyncio
 import logging
 import sys
 import os
+import io
+
+# Reconfigure stdout/stderr to UTF-8 to prevent emoji logging crashes on Windows
+if hasattr(sys.stdout, 'buffer'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+if hasattr(sys.stderr, 'buffer'):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 if os.name == 'nt':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from pathlib import Path
@@ -26,6 +34,11 @@ import json
 from datetime import datetime, timezone
 import uuid
 from agent.core.architecture_conformance import build_conformance_report
+
+# Workflow Engine
+from agent.workflow.workflow_store import WorkflowStore
+from agent.workflow.workflow_engine import WorkflowEngine
+from agent.workflow.workflow_scheduler import WorkflowScheduler
 
 # Safety & Intent Modules
 from agent.core.file_safety import start_gate as file_guard
@@ -52,6 +65,11 @@ logger = logging.getLogger("AgentAPI")
 
 # Global agent instance
 agent = None
+
+# Global workflow instances
+workflow_store: Optional[WorkflowStore] = None
+workflow_engine: Optional[WorkflowEngine] = None
+workflow_scheduler: Optional[WorkflowScheduler] = None
 
 class ConnectionManager:
     """Manages active WebSocket connections."""
@@ -270,35 +288,38 @@ async def lifespan(app: FastAPI):
         except Exception as wire_exc:
             logger.warning(f"⚠ Could not wire mission runtime reporter: {wire_exc}")
         
-        # Hook into VoiceManager if available
-        if agent._voice_manager:
-            agent._voice_manager.on_stt = lambda text: sync_broadcast("stt", "user", text)
-            agent._voice_manager.on_partial = lambda text: sync_broadcast("stt", "user", text, partial=True)
-            agent._voice_manager.on_status = lambda text, role="system": sync_broadcast("status", role, text)
+        # Hook into VoiceSession (V2) if available
+        if hasattr(agent, '_voice_session') and agent._voice_session:
+            def broadcast_voice_state(state, level, transcript, message, task_id, step):
+                # Broadcast custom voice state to websocket
+                event = {
+                    "type": "voice_state",
+                    "state": state,
+                    "level": level,
+                    "transcript": transcript,
+                    "message": message,
+                    "task_id": task_id,
+                    "step": step,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                # Run threadsafe
+                asyncio.run_coroutine_threadsafe(manager.broadcast(event), loop)
+
+            agent._voice_session.events.publish = broadcast_voice_state
+
+            def handle_voice_command(command: str):
+                logger.info(f"🎙 Voice Command detected: {command}")
+                # We are in a background thread here, dispatch back to main loop
+                async def run_process():
+                    await broadcast_event("status", "system", "Processing...")
+                    await agent.process_input(command)
+                asyncio.run_coroutine_threadsafe(run_process(), loop)
+                
+            agent._voice_session.on_command_callback = handle_voice_command
             
-            # Start background voice loop
-            async def handle_wake():
-                logger.info("🎙 Wake word detected!")
-                # Broadcast wake event so frontend clears partial STT messages
-                await broadcast_event("wake", "system", "Wake word detected")
-                await agent._voice_manager.greet()
-                
-            async def handle_voice_input(text):
-                logger.info(f"🎙 Voice Input detected: {text}")
-                
-                # Yield to event loop to allow 'stt' broadcast (sent by VoiceManager.on_stt) to flush to UI
-                await asyncio.sleep(0.05)
-                
-                # Explicitly broadcast processing status (ensures "Processing..." indicator appears)
-                await broadcast_event("status", "system", "Processing...")
-                
-                await agent.process_input(text)
-            
-            asyncio.create_task(agent._voice_manager.start_voice_loop(
-                on_wake=handle_wake, 
-                on_input=handle_voice_input
-            ))
-            logger.info("🎙 Background voice interaction loop started")
+            # Start the state machine loop thread
+            agent._voice_session.start()
+            logger.info("🎙 Voice Session (V2) loop started")
             
             
         logger.info("✅ Agent initialized with Voice-Chat Bridge")
@@ -310,9 +331,33 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Failed to initialize agent: {e}")
         agent = None
     
+    # Initialize Workflow Engine (independent of agent)
+    global workflow_store, workflow_engine, workflow_scheduler
+    try:
+        workflow_store = WorkflowStore()
+        
+        async def _wf_broadcast(event: dict):
+            await manager.broadcast(event)
+        
+        workflow_engine = WorkflowEngine(store=workflow_store, broadcast_fn=_wf_broadcast)
+        
+        workflow_scheduler = WorkflowScheduler(
+            store=workflow_store,
+            engine_execute_fn=workflow_engine.execute_workflow
+        )
+        await workflow_scheduler.start()
+        logger.info("✅ Workflow engine & scheduler initialized")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize workflow engine: {e}")
+    
     yield
     
     # Cleanup
+    if workflow_scheduler:
+        try:
+            await workflow_scheduler.stop()
+        except:
+            pass
     if agent:
         try:
             agent.shutdown()
@@ -382,7 +427,7 @@ async def websocket_endpoint(websocket: WebSocket):
 try:
     from agent.video_stream import router as video_router
     app.include_router(video_router, prefix="/api")
-    logger.info("📹 Video stream endpoint registered at /api/video_feed")
+    logger.info("Video stream endpoint registered at /api/video_feed")
 except Exception as e:
     logger.warning(f"⚠ Video stream not available: {e}")
 
@@ -2006,6 +2051,13 @@ async def trading_websocket(websocket: WebSocket):
                         "memory_usage": "Optimal"
                     }
                     
+                    # Drain pending trading events
+                    try:
+                        from agent.trading.trading_events import trading_events
+                        pending_events = trading_events.drain()
+                    except Exception:
+                        pending_events = []
+
                     payload = {
                         "type": "HEARTBEAT",
                         "timestamp": datetime.now().isoformat(),
@@ -2020,7 +2072,8 @@ async def trading_websocket(websocket: WebSocket):
                                 "drawdown_pct": float(db_state.get("drawdown_pct", 0)),
                                 "kill_switch_active": loop.kill_switch.is_active if loop.kill_switch else False,
                                 "kill_switch_reason": loop.kill_switch.activation_reason if loop.kill_switch else ""
-                            }
+                            },
+                            "events": pending_events,
                         }
                     }
                     
@@ -2692,6 +2745,209 @@ async def trading_reset():
         return {"mode": "NORMAL"}
     except Exception as e:
         return {"status": "ERROR", "error": str(e)}
+
+
+# ==========================================
+# WORKFLOW ENGINE API ENDPOINTS
+# ==========================================
+
+class WorkflowCreateRequest(BaseModel):
+    name: str = "Untitled Workflow"
+    description: str = ""
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+    config: Dict[str, Any] = {}
+
+class WorkflowRunRequest(BaseModel):
+    trigger_data: Dict[str, Any] = {}
+
+class WorkflowInlineRunRequest(BaseModel):
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+    config: Dict[str, Any] = {}
+
+class WorkflowScheduleRequest(BaseModel):
+    cron_expression: str
+
+
+@app.post("/api/workflow")
+async def create_workflow(req: WorkflowCreateRequest):
+    """Create/save a new workflow."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    wf = workflow_store.create_workflow(
+        name=req.name,
+        nodes=req.nodes,
+        edges=req.edges,
+        description=req.description,
+        config=req.config
+    )
+    return {"status": "success", "workflow": wf}
+
+
+@app.get("/api/workflow")
+async def list_workflows():
+    """List all saved workflows."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    workflows = workflow_store.list_workflows()
+    return {"status": "success", "workflows": workflows}
+
+
+@app.get("/api/workflow/{workflow_id}")
+async def get_workflow(workflow_id: str):
+    """Get a specific workflow by ID."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    wf = workflow_store.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    schedule = workflow_store.get_schedule(workflow_id)
+    wf["schedule"] = schedule
+    return {"status": "success", "workflow": wf}
+
+
+@app.put("/api/workflow/{workflow_id}")
+async def update_workflow(workflow_id: str, req: WorkflowCreateRequest):
+    """Update an existing workflow."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    wf = workflow_store.update_workflow(
+        workflow_id,
+        name=req.name,
+        nodes=req.nodes,
+        edges=req.edges,
+        description=req.description,
+        config=req.config
+    )
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    return {"status": "success", "workflow": wf}
+
+
+@app.delete("/api/workflow/{workflow_id}")
+async def delete_workflow(workflow_id: str):
+    """Delete a workflow."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    deleted = workflow_store.delete_workflow(workflow_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    return {"status": "success", "deleted": True}
+
+
+@app.post("/api/workflow/{workflow_id}/run")
+async def run_workflow(workflow_id: str, req: WorkflowRunRequest = None):
+    """Execute a saved workflow (real execution with all node executors)."""
+    if not workflow_engine:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    wf = workflow_store.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    trigger_data = req.trigger_data if req else {}
+    
+    # Run in background so the HTTP response returns immediately
+    async def _bg_run():
+        try:
+            await workflow_engine.execute_workflow(workflow_id, trigger_type="manual", trigger_data=trigger_data)
+        except Exception as e:
+            logger.error(f"Background workflow run failed: {e}")
+    
+    asyncio.create_task(_bg_run())
+    
+    return {"status": "started", "workflow_id": workflow_id, "message": "Workflow execution started. Watch WebSocket for real-time updates."}
+
+
+@app.post("/api/workflow/run-inline")
+async def run_workflow_inline(req: WorkflowInlineRunRequest):
+    """Execute a workflow from raw node/edge data without saving first."""
+    if not workflow_engine:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    if not req.nodes:
+        raise HTTPException(status_code=400, detail="No nodes provided")
+    
+    async def _bg_run():
+        try:
+            await workflow_engine.execute_workflow_inline(
+                nodes=req.nodes, edges=req.edges, config=req.config
+            )
+        except Exception as e:
+            logger.error(f"Inline workflow run failed: {e}")
+    
+    asyncio.create_task(_bg_run())
+    
+    return {"status": "started", "message": "Inline workflow execution started."}
+
+
+@app.get("/api/workflow/{workflow_id}/runs")
+async def get_workflow_runs(workflow_id: str):
+    """Get run history for a workflow."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    runs = workflow_store.get_runs(workflow_id)
+    return {"status": "success", "runs": runs}
+
+
+@app.post("/api/workflow/{workflow_id}/schedule")
+async def set_workflow_schedule(workflow_id: str, req: WorkflowScheduleRequest):
+    """Set a cron schedule for a workflow."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    wf = workflow_store.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    schedule = workflow_store.set_schedule(workflow_id, req.cron_expression)
+    
+    if workflow_scheduler:
+        workflow_scheduler.reload_schedules()
+    
+    return {"status": "success", "schedule": schedule}
+
+
+@app.delete("/api/workflow/{workflow_id}/schedule")
+async def remove_workflow_schedule(workflow_id: str):
+    """Remove the schedule for a workflow."""
+    if not workflow_store:
+        raise HTTPException(status_code=503, detail="Workflow engine not initialized")
+    
+    removed = workflow_store.remove_schedule(workflow_id)
+    
+    if workflow_scheduler:
+        workflow_scheduler.reload_schedules()
+    
+    return {"status": "success", "removed": removed}
+
+
+# ══════════════════════════════════════════════════════════════
+# TRADING API ROUTES
+# ══════════════════════════════════════════════════════════════
+
+try:
+    from agent.trading.trading_api import router as trading_router, set_trading_loop
+    from agent.trading.autonomous_loop import AutonomousTradingLoop
+
+    app.include_router(trading_router)
+
+    # Initialize the trading loop (lazy — doesn't start until POST /api/trading/start)
+    _trading_loop_instance = AutonomousTradingLoop()
+    set_trading_loop(_trading_loop_instance)
+    logger.info("Trading API routes registered (/api/trading/*)")
+except Exception as e:
+    logger.warning(f"Trading API routes not registered: {e}")
 
 
 # Run with uvicorn when executed directly

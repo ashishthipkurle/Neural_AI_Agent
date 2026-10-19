@@ -1,5 +1,5 @@
 """
-INDRA First Run Setup — Onboarding Q&A on first launch.
+INDRA First Run Setup -- Onboarding Q&A on first launch.
 Seeds the identity DB if it's empty.
 """
 
@@ -45,7 +45,7 @@ def run_onboarding(speaker, memory: MemoryStore, ears):
         time.sleep(0.5)
         
     questions = [
-        "What do you mainly use your computer for — work, coding, content creation, or something else?",
+        "What do you mainly use your computer for -- work, coding, content creation, or something else?",
         "What time do you usually start your day?",
         "Which apps do you use most often?",
         "Is there anything you'd like me to always remember about how you prefer to work?"

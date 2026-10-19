@@ -1,5 +1,5 @@
 """
-INDRA TTS — Text-to-Speech engine using Microsoft Edge Neural Voices.
+INDRA TTS -- Text-to-Speech engine using Microsoft Edge Neural Voices.
 Provides realistic, natural-sounding speech via edge-tts (free, no API key).
 Falls back to gTTS if edge-tts is unavailable.
 """
@@ -22,24 +22,24 @@ from utils.logger import get_logger
 
 logger = get_logger("TTS")
 
-# ── edge-tts (Primary — Realistic Neural Voices) ──
+# -- edge-tts (Primary -- Realistic Neural Voices) --
 try:
     import edge_tts
     HAS_EDGE_TTS = True
-    logger.info(f"edge-tts loaded — voice: {TTS_VOICE_ENGLISH}")
+    logger.info(f"edge-tts loaded -- voice: {TTS_VOICE_ENGLISH}")
 except ImportError:
     HAS_EDGE_TTS = False
-    logger.warning("edge-tts not installed — run: pip install edge-tts")
+    logger.warning("edge-tts not installed -- run: pip install edge-tts")
 
-# ── gTTS (Fallback) ──
+# -- gTTS (Fallback) --
 try:
     from gtts import gTTS as GTTS_Class
     HAS_GTTS = True
 except ImportError:
     HAS_GTTS = False
-    logger.warning("gTTS not installed — fallback TTS unavailable")
+    logger.warning("gTTS not installed -- fallback TTS unavailable")
 
-# ── Kokoro (Legacy fallback) ──
+# -- Kokoro (Legacy fallback) --
 HAS_KOKORO = False
 try:
     from kokoro import KPipeline
@@ -99,7 +99,7 @@ class TTS:
             return b""
 
     def _edge_tts_synth(self, text: str, lang: str) -> bytes:
-        """Synthesise using Microsoft Edge Neural Voices — returns MP3 bytes."""
+        """Synthesise using Microsoft Edge Neural Voices -- returns MP3 bytes."""
         voice = self._voice_map.get(lang, TTS_VOICE_ENGLISH)
 
         async def _generate():
@@ -119,7 +119,7 @@ class TTS:
         try:
             loop = _get_or_create_event_loop()
             if loop.is_running():
-                # We're inside an async context — run in a new thread
+                # We're inside an async context -- run in a new thread
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     future = pool.submit(lambda: asyncio.run(_generate()))
@@ -138,7 +138,7 @@ class TTS:
             return self._gtts_synth(text, lang) if HAS_GTTS else b""
 
     def _gtts_synth(self, text: str, lang: str) -> bytes:
-        """Synthesise text using Google TTS — returns MP3 bytes."""
+        """Synthesise text using Google TTS -- returns MP3 bytes."""
         lang_code = {"hindi": "hi", "marathi": "mr", "english": "en"}.get(lang, "en")
         try:
             tts = GTTS_Class(text=text, lang=lang_code, slow=False)
@@ -151,7 +151,7 @@ class TTS:
             return b""
 
     def _kokoro_synth(self, text: str) -> bytes:
-        """Legacy Kokoro synthesis — returns WAV bytes."""
+        """Legacy Kokoro synthesis -- returns WAV bytes."""
         try:
             import numpy as np
             import wave

@@ -1,5 +1,5 @@
 """
-INDRA Screenshot Utility — Captures screen, encodes base64 for vision LLM.
+INDRA Screenshot Utility -- Captures screen, encodes base64 for vision LLM.
 """
 
 import base64
@@ -20,7 +20,7 @@ try:
     HAS_MSS = True
 except ImportError:
     HAS_MSS = False
-    logger.warning("mss/Pillow not installed — screenshots unavailable")
+    logger.warning("mss/Pillow not installed -- screenshots unavailable")
 
 
 def capture_screenshot_b64(quality: int = 70, max_width: int = 1280) -> str:

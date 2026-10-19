@@ -273,10 +273,32 @@ class NeuralAgent:
         
         try:
             from agent.core.llm import LocalLLMRuntime, LLMBackend
+            import requests
+            import time
             
             llm_config = self.config.get('llm', {})
             provider = llm_config.get('provider', 'ollama')
             model_name = llm_config.get('model_name', 'phi3:mini')
+            
+            if provider == 'ollama':
+                base_url = llm_config.get('ollama_url', 'http://localhost:11434')
+                logger.info(f"Checking Ollama at {base_url}...")
+                start_time = time.time()
+                ollama_ready = False
+                while time.time() - start_time < 60:
+                    try:
+                        resp = requests.get(f"{base_url}/api/tags", timeout=2)
+                        if resp.status_code == 200:
+                            ollama_ready = True
+                            break
+                    except requests.RequestException:
+                        pass
+                    logger.info("Waiting for Ollama to start...")
+                    time.sleep(2)
+                
+                if not ollama_ready:
+                    logger.error(f"Ollama failed to respond at {base_url} after 60s. Continuing, but LLM features will be degraded.")
+            
             
             backend = LLMBackend.OLLAMA if provider == 'ollama' else LLMBackend.LLAMA_CPP
             
@@ -341,32 +363,16 @@ class NeuralAgent:
             logger.warning(f"⚠ Security initialization partial: {e}")
     
     def _init_voice(self):
-        """Initialize voice systems."""
+        """Initialize voice systems (V2)."""
         logger.info("Initializing voice systems...")
+        self._voice_session = None
+        self._voice_manager = None
         
         try:
-            from agent.voice.voice_manager import VoiceManager, VoiceConfig
-            from agent.voice.emotion_controller import EmotionController
-            
-            voice_config = self.config.get('voice_settings', {})
-            
-            config = VoiceConfig(
-                wake_words=voice_config.get('wake_words', ["hey antigravity", "antigravity", "hii bro", "hey bro"]),
-                greeting_message=voice_config.get('greeting', 'Hey there!'),
-                confirm_before_action=True,
-                voice_speed=voice_config.get('speed', 1.0),
-                enable_emotion=True
-            )
-            
-            self._voice_manager = VoiceManager(config=config)
-            
-            # Apply sync hooks if injected
-            if self.sync_broadcast:
-                self._voice_manager.on_stt = lambda text: self.sync_broadcast("stt", "user", text)
-                self._voice_manager.on_partial = lambda text: self.sync_broadcast("stt", "user", text, partial=True)
-                self._voice_manager.on_status = lambda text: self.sync_broadcast("status", "system", text)
-            
-            logger.info("✓ Voice systems initialized")
+            from agent.voice.session import VoiceSession
+            self._voice_session = VoiceSession(device="cuda")
+            self._voice_manager = self._voice_session
+            logger.info("✓ Voice systems initialized (V2)")
         except Exception as e:
             logger.warning(f"⚠ Voice initialization partial: {e}")
     

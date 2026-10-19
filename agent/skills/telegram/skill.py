@@ -38,8 +38,11 @@ class TelegramSkill(BaseSkill):
         self.config = config or {}
         self.agent = agent
         
-        self.token = self.config.get('telegram', {}).get('bot_token')
-        self.chat_id = self.config.get('telegram', {}).get('chat_id') # Main user ID
+        raw_token = self.config.get('telegram', {}).get('bot_token', '')
+        self.token = os.environ.get("TELEGRAM_TOKEN") or (raw_token if not raw_token.startswith('$') else '')
+        
+        raw_chat = self.config.get('telegram', {}).get('chat_id', '')
+        self.chat_id = os.environ.get("TELEGRAM_CHAT_ID") or (raw_chat if not str(raw_chat).startswith('$') else '')
         
         self.bot = None
         self.application = None

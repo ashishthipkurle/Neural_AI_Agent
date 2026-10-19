@@ -1,5 +1,5 @@
 """
-INDRA Wake Word Detector — "Hey INDRA" always-on local detection.
+INDRA Wake Word Detector -- "Hey INDRA" always-on local detection.
 
 Uses a dual-strategy approach:
   1. Primary: Continuous speech-to-text with faster-whisper, checking for "hey indra"
@@ -7,7 +7,7 @@ Uses a dual-strategy approach:
   2. Fallback: Simple energy-based voice activity detection if Whisper unavailable.
 
 The detector runs in a daemon thread with low CPU overhead using VAD-gated
-transcription — audio is only sent to Whisper when voice activity is detected.
+transcription -- audio is only sent to Whisper when voice activity is detected.
 """
 
 import threading
@@ -24,30 +24,30 @@ from utils.logger import get_logger
 
 logger = get_logger("WakeWord")
 
-# ── PyAudio ──
+# -- PyAudio --
 try:
     import pyaudio
     HAS_PYAUDIO = True
 except ImportError:
     HAS_PYAUDIO = False
-    logger.error("pyaudio not installed — wake word detection unavailable")
+    logger.error("pyaudio not installed -- wake word detection unavailable")
 
-# ── faster-whisper (for keyword-in-transcript wake word) ──
+# -- faster-whisper (for keyword-in-transcript wake word) --
 try:
     from faster_whisper import WhisperModel
     HAS_WHISPER = True
     logger.info("faster-whisper loaded for wake word detection")
 except ImportError:
     HAS_WHISPER = False
-    logger.warning("faster-whisper not installed — using energy-only fallback")
+    logger.warning("faster-whisper not installed -- using energy-only fallback")
 
-# ── webrtcvad (for voice activity detection gating) ──
+# -- webrtcvad (for voice activity detection gating) --
 try:
     import webrtcvad
     HAS_VAD = True
 except ImportError:
     HAS_VAD = False
-    logger.info("webrtcvad not installed — using energy-based VAD")
+    logger.info("webrtcvad not installed -- using energy-based VAD")
 
 
 SAMPLE_RATE = 16000
@@ -69,14 +69,14 @@ class WakeWordDetector:
     When "Hey INDRA" is detected, calls the on_wake_callback.
 
     If INDRA is mid-conversation (within CONVERSATION_TIMEOUT seconds),
-    the wake word requirement is skipped — Ashish can speak freely.
+    the wake word requirement is skipped -- Ashish can speak freely.
 
     Detection strategy:
       - Continuously capture audio in 30ms VAD frames
       - When voice activity is detected (enough consecutive speech frames),
         transcribe the rolling 2-second buffer using faster-whisper (tiny model)
       - Check if the transcription contains the wake phrase
-      - If match → trigger callback
+      - If match -> trigger callback
     """
 
     def __init__(self, on_wake_callback):
@@ -101,7 +101,7 @@ class WakeWordDetector:
             except Exception as e:
                 logger.warning(f"VAD init failed: {e}")
 
-        # Whisper model (tiny for speed — only needs to recognize a short phrase)
+        # Whisper model (tiny for speed -- only needs to recognize a short phrase)
         self._whisper_model = None
         if HAS_WHISPER:
             try:
@@ -181,7 +181,7 @@ class WakeWordDetector:
     def _detection_loop(self):
         """Main detection loop running in daemon thread."""
         if not HAS_PYAUDIO:
-            logger.error("Cannot start wake word detection — pyaudio unavailable")
+            logger.error("Cannot start wake word detection -- pyaudio unavailable")
             return
 
         audio = pyaudio.PyAudio()
@@ -251,9 +251,9 @@ class WakeWordDetector:
                     if self._whisper_model:
                         detected = self._check_wake_whisper(audio_buffer)
                     else:
-                        # No Whisper — just use energy spike as wake trigger
+                        # No Whisper -- just use energy spike as wake trigger
                         detected = True
-                        logger.debug("No Whisper model — energy-triggered wake")
+                        logger.debug("No Whisper model -- energy-triggered wake")
 
                     if detected:
                         self._handle_wake()
@@ -314,7 +314,7 @@ class WakeWordDetector:
 
     def _handle_wake(self):
         """Handle wake word detection."""
-        logger.info("Wake word activated — starting listening")
+        logger.info("Wake word activated -- starting listening")
         self.mark_interaction()
 
         # Play confirmation chime (short beep)

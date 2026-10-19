@@ -1,5 +1,5 @@
 """
-INDRA Project Manager — Long-running project CRUD and status tracking.
+INDRA Project Manager -- Long-running project CRUD and status tracking.
 Persists to JSON for easy inspection and survives across sessions.
 """
 
@@ -61,7 +61,7 @@ class ProjectManager:
             self.projects[pid]["status"] = status
             self.projects[pid]["last_updated"] = datetime.datetime.now().isoformat()
             self._save()
-            logger.info(f"Project {pid} → {status}")
+            logger.info(f"Project {pid} -> {status}")
         else:
             logger.warning(f"Project not found: {pid}")
 

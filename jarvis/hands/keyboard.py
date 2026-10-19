@@ -1,5 +1,5 @@
 """
-INDRA Keyboard Control — PyAutoGUI keyboard operations with human-like delays.
+INDRA Keyboard Control -- PyAutoGUI keyboard operations with human-like delays.
 """
 
 import time

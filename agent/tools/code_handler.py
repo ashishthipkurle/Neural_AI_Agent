@@ -79,6 +79,10 @@ class CodeExecutionHandler(QObject):
         executor = self._get_executor()
         if not executor:
             return "Error: Code executor not available"
+            
+        if not executor.is_available():
+            return "Error: Code execution disabled (Docker is not available). Refusing to run unsandboxed code."
+
         
         # Generate preview analysis
         analysis = executor.preview_code(language, code)
@@ -140,6 +144,9 @@ class CodeExecutionHandler(QObject):
         executor = self._get_executor()
         if not executor:
             return "Error: Code executor not available"
+            
+        if not executor.is_available():
+            return "Error: Code execution disabled (Docker is not available). Refusing to run unsandboxed code."
         
         is_valid, message = executor.dry_run(language, code)
         return message

@@ -1,5 +1,5 @@
 """
-INDRA Accessibility Layer — Windows UI Automation live layer.
+INDRA Accessibility Layer -- Windows UI Automation live layer.
 PRIMARY way INDRA finds UI elements. Vision LLM is the fallback, not this.
 """
 
@@ -20,7 +20,7 @@ try:
     HAS_PYWINAUTO = True
 except ImportError:
     HAS_PYWINAUTO = False
-    logger.warning("pywinauto not installed — accessibility layer unavailable")
+    logger.warning("pywinauto not installed -- accessibility layer unavailable")
 
 
 class AccessibilityLayer:

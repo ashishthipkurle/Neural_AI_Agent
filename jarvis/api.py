@@ -1,5 +1,5 @@
 """
-INDRA API Bridge — Allows external UIs (like the Neural Trading Terminal)
+INDRA API Bridge -- Allows external UIs (like the Neural Trading Terminal)
 to send text commands to INDRA as if they were spoken.
 Includes WebSocket for real-time state broadcasting (edge lights).
 """
@@ -179,6 +179,107 @@ async def delete_indra_conversation(conv_id: str):
         return {"error": "Not initialized"}
     _conv_logger.delete_conversation(conv_id)
     return {"status": "success"}
+
+# -- INDRA OS Agent Framework API ------------------------------------------
+
+_orchestrator = None
+_agent_registry = None
+_agent_bus = None
+_emotional_engine = None
+
+def init_agent_framework(orchestrator, registry, bus, emotional):
+    """Register the INDRA OS agent framework with the API."""
+    global _orchestrator, _agent_registry, _agent_bus, _emotional_engine
+    _orchestrator = orchestrator
+    _agent_registry = registry
+    _agent_bus = bus
+    _emotional_engine = emotional
+    logger.info("INDRA OS agent framework connected to API")
+
+@app.get("/api/agents")
+async def get_agents():
+    """Get all agents and their current status."""
+    if _agent_registry is None:
+        return []
+    return _agent_registry.get_status_report()
+
+@app.get("/api/agents/{name}")
+async def get_agent(name: str):
+    """Get details for a specific agent."""
+    if _agent_registry is None:
+        return {"error": "Not initialized"}
+    agent = _agent_registry.get(name)
+    if agent is None:
+        return {"error": "Agent not found"}
+    return agent.to_dict()
+
+@app.post("/api/agents/{name}/task")
+async def assign_task_to_agent(name: str, payload: dict):
+    """Assign a task directly to a specific agent."""
+    if _orchestrator is None:
+        return {"error": "Orchestrator not initialized"}
+    text = payload.get("text", "").strip()
+    if not text:
+        return {"error": "Empty task description"}
+    result = await _orchestrator._handle_delegation(text, name)
+    return result
+
+@app.post("/api/indra/command")
+async def indra_command(payload: dict):
+    """Send a natural language command to INDRA orchestrator."""
+    if _orchestrator is None:
+        return {"error": "Orchestrator not initialized"}
+    text = payload.get("text", "").strip()
+    if not text:
+        return {"error": "Empty command"}
+    result = await _orchestrator.process_user_input(text)
+    return result
+
+@app.get("/api/tasks")
+async def get_tasks():
+    """Get all active and recent tasks."""
+    if _orchestrator is None:
+        return {"active": [], "history": []}
+    return {
+        "active": _orchestrator.get_active_tasks(),
+        "history": _orchestrator.get_task_history(limit=30),
+    }
+
+@app.get("/api/system/status")
+async def get_system_status():
+    """Get full INDRA OS system status for dashboard."""
+    if _orchestrator is None:
+        return {"error": "Not initialized"}
+    status = _orchestrator.get_system_status()
+    if _emotional_engine:
+        status["emotional"] = _emotional_engine.to_dict()
+    return status
+
+# WebSocket for real-time agent status
+_agent_ws_connections: list = []
+
+@app.websocket("/ws/agents")
+async def ws_agents(websocket: WebSocket):
+    """WebSocket endpoint for real-time agent status updates."""
+    await websocket.accept()
+    _agent_ws_connections.append(websocket)
+    logger.info(f"Agent WS client connected (total: {len(_agent_ws_connections)})")
+
+    # Send initial status
+    if _orchestrator:
+        await websocket.send_text(json.dumps({
+            "type": "status",
+            "data": _orchestrator.get_system_status(),
+        }))
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+    except Exception:
+        if websocket in _agent_ws_connections:
+            _agent_ws_connections.remove(websocket)
+        logger.info(f"Agent WS client disconnected (total: {len(_agent_ws_connections)})")
+
 
 def start_api_server_in_thread(port: int = 8001):
     """Start the FastAPI server in a background daemon thread."""

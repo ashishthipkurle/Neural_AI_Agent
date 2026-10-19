@@ -860,22 +860,107 @@ def browser_check(url: str) -> str:
 # =========================================================================
 INFRASTRUCTURE_ACCELERATION = True  # Simulating parity with Google's massive infrastructure
 
+_browser_tools_instance = None
+
 @tool
-def browser_use(url: str, action: str, selector: Optional[str] = None, text: Optional[str] = None) -> str:
-    """Full Browser Automation (Vision & Interaction).
+async def browser_use(url: str, action: str, selector: Optional[str] = None, text: Optional[str] = None) -> str:
+    """Full Browser Automation (Playwright).
     
-    Launch a real browser, look at the visual rendering of the UI, click buttons,
-    type in forms, and interact with complex Single Page Applications (SPAs) visually.
+    Launch a real browser, click buttons, type in forms, and interact with complex SPAs.
     
     Args:
         url: The URL to navigate to or interact with.
-        action: The action to perform ('navigate', 'click', 'type', 'screenshot', 'extract').
+        action: The action to perform ('navigate', 'read', 'close').
         selector: Optional CSS selector of the element to interact with.
         text: Optional text to type if action is 'type'.
     """
-    # In a real implementation, this would use Playwright/Selenium or a browser automation service
-    # For now, it represents the presence of this capability in the architecture.
-    return f"[Browser Automation] Performed '{action}' on {url}" + (f" at '{selector}'" if selector else "")
+    global _browser_tools_instance
+    if _browser_tools_instance is None:
+        from agent.tools.browser_tools import BrowserTools
+        _browser_tools_instance = BrowserTools()
+        
+    try:
+        if action == 'navigate':
+            return await _browser_tools_instance.navigate_to(url)
+        elif action == 'read':
+            return await _browser_tools_instance.read_content()
+        elif action == 'close':
+            return await _browser_tools_instance.close_browser()
+        else:
+            return f"Error: Unsupported action '{action}'. Valid actions are 'navigate', 'read', 'close'."
+    except Exception as e:
+        return f"Browser error: {e}"
+
+_os_tools_instance = None
+
+@tool
+def desktop_action(action: str, x: Optional[int] = None, y: Optional[int] = None, text: Optional[str] = None, key: Optional[str] = None, app_name: Optional[str] = None) -> str:
+    """Desktop Automation Tool (PyAutoGUI).
+    
+    Control the user's mouse and keyboard, or launch desktop apps.
+    
+    Args:
+        action: One of 'move_mouse', 'click', 'type', 'press_key', 'launch_app'.
+        x, y: Coordinates for move_mouse.
+        text: Text for 'type'.
+        key: Key for 'press_key' (e.g. 'enter', 'win').
+        app_name: Name of app to launch.
+    """
+    global _os_tools_instance
+    if _os_tools_instance is None:
+        from agent.tools.os_tools import OSTools
+        _os_tools_instance = OSTools()
+        
+    try:
+        if action == 'move_mouse':
+            return _os_tools_instance.move_mouse(x, y)
+        elif action == 'click':
+            return _os_tools_instance.click_mouse()
+        elif action == 'type':
+            return _os_tools_instance.type_text(text)
+        elif action == 'press_key':
+            return _os_tools_instance.press_key(key)
+        elif action == 'launch_app':
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We can't await inside a sync tool easily if the event loop is running,
+                # but let's try to run it safely
+                task = loop.create_task(_os_tools_instance.launch_app(app_name))
+                # For a true implementation, we'd make this tool async. But since
+                # OSTools launch_app is async, we return a promise-like string for now
+                return f"Started launching app '{app_name}' in background."
+            return "Failed: No event loop."
+        else:
+            return f"Error: Unsupported action '{action}'"
+    except Exception as e:
+        return f"Desktop error: {e}"
+_vision_tools_instance = None
+
+@tool
+def vision_action(action: str, image_path: Optional[str] = None) -> str:
+    """Vision and Screen Capture Tool.
+    
+    Use this to see the user's screen or analyze images using local vision models.
+    
+    Args:
+        action: 'capture_screen' (takes a screenshot and returns path) or 'describe_image' (runs vision model on an image).
+        image_path: Path to the image for 'describe_image'.
+    """
+    global _vision_tools_instance
+    if _vision_tools_instance is None:
+        from agent.tools.vision_tools import VisionTools
+        _vision_tools_instance = VisionTools()
+        
+    try:
+        if action == 'capture_screen':
+            return _vision_tools_instance.capture_screen()
+        elif action == 'describe_image':
+            return _vision_tools_instance.describe_image(path=image_path)
+        else:
+            return f"Error: Unsupported action '{action}'"
+    except Exception as e:
+        return f"Vision error: {e}"
 
 
 @tool
@@ -926,6 +1011,8 @@ CODER_TOOLS = [
     web_search,
     browser_check,
     browser_use,
+    desktop_action,
+    vision_action,
     generate_image,
     knowledge_subagent,
 ]

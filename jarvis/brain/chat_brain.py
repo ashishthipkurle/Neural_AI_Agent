@@ -1,5 +1,5 @@
 """
-INDRA Chat Brain — Fast conversational LLM via Ollama.
+INDRA Chat Brain -- Fast conversational LLM via Ollama.
 Runs in its own thread pool so it never blocks vision brain.
 Streams responses and flushes complete sentences to speaker immediately.
 """

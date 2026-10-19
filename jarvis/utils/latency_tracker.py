@@ -1,5 +1,5 @@
 """
-INDRA Latency Tracker — Measures and logs per-stage timing.
+INDRA Latency Tracker -- Measures and logs per-stage timing.
 Warns when targets are exceeded. Helps optimise performance over time.
 """
 
@@ -29,7 +29,7 @@ class LatencyTracker:
         self.timings[stage] = elapsed_ms
 
         if target_ms is not None:
-            status = "✓" if elapsed_ms <= target_ms else "⚠ SLOW"
+            status = "OK" if elapsed_ms <= target_ms else "SLOW"
             logger.info(f"{stage}: {elapsed_ms:.0f}ms (target: {target_ms:.0f}ms) {status}")
 
             if elapsed_ms > target_ms * 1.5:
@@ -45,7 +45,7 @@ class LatencyTracker:
         breakdown = ", ".join(f"{s}={self.timings[s]:.0f}ms" for s in present)
         
         from config import TARGET_TOTAL_MS
-        status = "✓" if total <= TARGET_TOTAL_MS else "⚠ SLOW"
+        status = "OK" if total <= TARGET_TOTAL_MS else "SLOW"
         logger.info(f"Round-trip: {total:.0f}ms (target: {TARGET_TOTAL_MS}ms) {status} [{breakdown}]")
         self.timings = {}
 

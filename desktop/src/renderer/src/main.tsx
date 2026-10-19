@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import VoiceOverlay from "./components/VoiceOverlay";
 import "./index.css";
 
 function formatUnknownError(err: unknown): string {
@@ -55,7 +56,11 @@ try {
 	if (!rootEl) {
 		showFatalOverlay('Fatal', 'Missing #root element in index.html');
 	} else {
-		createRoot(rootEl).render(<App />);
+		if (window.location.hash === '#/overlay') {
+			createRoot(rootEl).render(<VoiceOverlay />);
+		} else {
+			createRoot(rootEl).render(<App />);
+		}
 	}
 } catch (err) {
 	showFatalOverlay('Fatal during startup', err);

@@ -1,1 +1,1 @@
-# INDRA — Intelligent Neural Desktop & Reasoning Agent
+# INDRA -- Intelligent Neural Desktop & Reasoning Agent

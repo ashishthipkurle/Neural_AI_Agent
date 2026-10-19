@@ -1,5 +1,5 @@
 """
-INDRA Memory Updater — Updates memory after each session or task.
+INDRA Memory Updater -- Updates memory after each session or task.
 """
 
 from memory.store import MemoryStore

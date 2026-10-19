@@ -1,5 +1,5 @@
 """
-INDRA Ears — Microphone input → VAD → faster-whisper → text.
+INDRA Ears -- Microphone input -> VAD -> faster-whisper -> text.
 Captures speech from the microphone, uses Voice Activity Detection to find
 speech boundaries, then transcribes using faster-whisper.
 """
@@ -19,23 +19,23 @@ from utils.logger import get_logger
 
 logger = get_logger("Ears")
 
-# ── PyAudio ──
+# -- PyAudio --
 try:
     import pyaudio
     HAS_PYAUDIO = True
 except ImportError:
     HAS_PYAUDIO = False
-    logger.error("pyaudio not installed — microphone unavailable")
+    logger.error("pyaudio not installed -- microphone unavailable")
 
-# ── WebRTC VAD ──
+# -- WebRTC VAD --
 try:
     import webrtcvad
     HAS_VAD = True
 except ImportError:
     HAS_VAD = False
-    logger.warning("webrtcvad not installed — using energy-based VAD fallback")
+    logger.warning("webrtcvad not installed -- using energy-based VAD fallback")
 
-# ── faster-whisper ──
+# -- faster-whisper --
 try:
     from faster_whisper import WhisperModel
     _whisper_model = WhisperModel(
@@ -47,7 +47,7 @@ try:
     logger.info(f"faster-whisper loaded (model: {WHISPER_MODEL})")
 except ImportError:
     HAS_WHISPER = False
-    logger.error("faster-whisper not installed — speech-to-text unavailable")
+    logger.error("faster-whisper not installed -- speech-to-text unavailable")
 except Exception as e:
     HAS_WHISPER = False
     logger.error(f"Whisper init failed: {e}")

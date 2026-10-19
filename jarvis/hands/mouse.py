@@ -1,5 +1,5 @@
 """
-INDRA Mouse Control — PyAutoGUI mouse operations with human-like delays.
+INDRA Mouse Control -- PyAutoGUI mouse operations with human-like delays.
 """
 
 import time
@@ -71,7 +71,7 @@ class Mouse:
         _human_delay()
         pyautogui.moveTo(x1, y1, duration=0.1)
         pyautogui.drag(x2 - x1, y2 - y1, duration=duration)
-        logger.debug(f"Drag ({x1},{y1}) → ({x2},{y2})")
+        logger.debug(f"Drag ({x1},{y1}) -> ({x2},{y2})")
 
     def get_position(self) -> tuple[int, int]:
         """Get current mouse position."""

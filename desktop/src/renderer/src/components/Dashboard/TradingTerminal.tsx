@@ -11,6 +11,10 @@ import SystemHealth from './Trading/SystemHealth';
 import TradeHistory from './Trading/TradeHistory';
 import TradingChat from './Trading/TradingChat';
 import DrawingToolbar from './Trading/DrawingToolbar';
+import EquityCurveChart from './Trading/EquityCurveChart';
+import StrategyHeatmap from './Trading/StrategyHeatmap';
+import TradeJournal from './Trading/TradeJournal';
+import IntelligencePanel from './Trading/IntelligencePanel';
 
 interface TradingTerminalProps {
     onClose: () => void;
@@ -56,7 +60,7 @@ function UpstoxStatus() {
 }
 
 export default function TradingTerminal({ onClose }: TradingTerminalProps) {
-    const [activeTab, setActiveTab] = React.useState<'WATCHLIST' | 'POSITIONS' | 'ORDERS' | 'SYSTEM' | 'CHAT' | 'HISTORY'>('SYSTEM');
+    const [activeTab, setActiveTab] = React.useState<'WATCHLIST' | 'POSITIONS' | 'ORDERS' | 'SYSTEM' | 'CHAT' | 'HISTORY' | 'PERFORMANCE' | 'JOURNAL' | 'INTELLIGENCE'>('SYSTEM');
     const {
         portfolio, candles, indicators, activeSignals, tradeHistory, recentOrders, tradeStats,
         riskState, systemStatus, selectedSymbol, selectedTimeframe, symbols, setSymbol,
@@ -259,6 +263,9 @@ export default function TradingTerminal({ onClose }: TradingTerminalProps) {
                             { id: 'POSITIONS', label: 'Positions', icon: <Layers size={14} /> },
                             { id: 'ORDERS', label: 'Orders', icon: <LayoutList size={14} /> },
                             { id: 'HISTORY', label: 'History', icon: <List size={14} /> },
+                            { id: 'PERFORMANCE', label: 'Perf', icon: <AlignEndHorizontal size={14} /> },
+                            { id: 'JOURNAL', label: 'Journal', icon: <Ruler size={14} /> },
+                            { id: 'INTELLIGENCE', label: 'Intel', icon: <Crosshair size={14} /> },
                             { id: 'CHAT', label: 'AI Chat', icon: <Type size={14} /> },
                             { id: 'SYSTEM', label: 'System', icon: <Zap size={14} /> }
                         ].map(tab => (
@@ -340,6 +347,18 @@ export default function TradingTerminal({ onClose }: TradingTerminalProps) {
                         )}
                         {activeTab === 'HISTORY' && (
                             <TradeHistory trades={tradeHistory} stats={tradeStats} />
+                        )}
+                        {activeTab === 'PERFORMANCE' && (
+                            <>
+                                <EquityCurveChart className="h-[280px]" />
+                                <StrategyHeatmap />
+                            </>
+                        )}
+                        {activeTab === 'JOURNAL' && (
+                            <TradeJournal />
+                        )}
+                        {activeTab === 'INTELLIGENCE' && (
+                            <IntelligencePanel />
                         )}
                         {activeTab === 'CHAT' && (
                             <TradingChat />

@@ -1,5 +1,5 @@
 """
-INDRA Conversation Logger — stores voice interactions to JSON files.
+INDRA Conversation Logger -- stores voice interactions to JSON files.
 Each conversation is a session from wake-word to idle.
 """
 
@@ -85,7 +85,7 @@ class ConversationLogger:
         self._current_messages = []
 
     def save_current(self):
-        """Save without ending — auto-save after each exchange."""
+        """Save without ending -- auto-save after each exchange."""
         if not self._current_id or not self._current_messages:
             return
 
@@ -105,7 +105,7 @@ class ConversationLogger:
             pass
 
     def get_all_conversations(self) -> list:
-        """Get all conversations (newest first), lightweight — no messages."""
+        """Get all conversations (newest first), lightweight -- no messages."""
         conversations = []
         for f in CONV_DIR.glob("*.json"):
             try:

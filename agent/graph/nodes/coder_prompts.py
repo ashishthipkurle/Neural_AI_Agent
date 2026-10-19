@@ -261,7 +261,7 @@ MULTI-FILE WORKFLOW:
 - Finally, verify all changes in a third batch (compile, lint, test).
 
 TOOLS AVAILABLE: bash, glob, grep, ls, read, edit, multi_edit, write, 
-notebook_read, notebook_edit, web_fetch, web_search, todo_read, todo_write, task, exit_plan_mode
+notebook_read, notebook_edit, web_fetch, web_search, todo_read, todo_write, task, exit_plan_mode, browser_use, desktop_action, vision_action
 
 <env>
 Working directory: {cwd}

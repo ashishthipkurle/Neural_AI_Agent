@@ -1,5 +1,5 @@
 """
-INDRA Logger — Structured logging to indra.log and console.
+INDRA Logger -- Structured logging to indra.log and console.
 All modules import logger from here for consistent formatting.
 """
 
@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-# Import log path from config — but handle circular import gracefully
+# Import log path from config -- but handle circular import gracefully
 try:
     from config import LOG_PATH
 except ImportError:
@@ -31,23 +31,23 @@ def get_logger(name: str = "INDRA") -> logging.Logger:
     
     logger.setLevel(logging.DEBUG)
     
-    # ── Console handler (INFO and above) ──
+    # -- Console handler (INFO and above) --
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console_fmt = logging.Formatter(
-        fmt="%(asctime)s │ %(name)-18s │ %(levelname)-7s │ %(message)s",
+        fmt="%(asctime)s | %(name)-18s | %(levelname)-7s | %(message)s",
         datefmt="%H:%M:%S"
     )
     console.setFormatter(console_fmt)
     
-    # ── File handler (DEBUG and above — full detail) ──
+    # -- File handler (DEBUG and above -- full detail) --
     log_file = Path(LOG_PATH)
     log_file.parent.mkdir(parents=True, exist_ok=True)
     
     file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_fmt = logging.Formatter(
-        fmt="%(asctime)s │ %(name)-18s │ %(levelname)-7s │ %(funcName)s:%(lineno)d │ %(message)s",
+        fmt="%(asctime)s | %(name)-18s | %(levelname)-7s | %(funcName)s:%(lineno)d | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
     file_handler.setFormatter(file_fmt)

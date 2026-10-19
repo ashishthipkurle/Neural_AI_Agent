@@ -47,6 +47,8 @@ class OrderManager:
         lifecycle_engine=None,
         strategy_engine=None,
         telegram_notifier=None,
+        ml_predictor=None,
+        earnings_guard=None,
     ) -> None:
         self.logger = logging.getLogger("OrderManager")
 
@@ -67,6 +69,8 @@ class OrderManager:
         self.lifecycle_engine = lifecycle_engine
         self.strategy_engine = strategy_engine
         self.telegram = telegram_notifier
+        self.ml_predictor = ml_predictor
+        self.earnings_guard = earnings_guard
 
         # Trading state
         self._paused = False
@@ -103,6 +107,20 @@ class OrderManager:
         if self.data_feed and not self._is_paper_mode():
             if not self.data_feed.is_data_fresh(symbol, max_age_seconds=900):
                 return self._reject(signal, "STALE_DATA", f"Data for {symbol} is stale")
+
+        # ── Gate 3.5: Earnings Calendar Guard ────────────────────
+        if self.earnings_guard:
+            try:
+                earnings_result = self.earnings_guard.check(symbol)
+                if not earnings_result.get("safe", True):
+                    days = earnings_result.get("days_until", "?")
+                    date = earnings_result.get("earnings_date", "?")
+                    return self._reject(
+                        signal, "EARNINGS_BLOCK",
+                        f"Earnings in {days} days ({date}) — blocking new entries"
+                    )
+            except Exception as e:
+                self.logger.warning(f"EarningsGuard error (continuing): {e}")
 
         # ── Gate 4: Macro Filter ─────────────────────────────────
         macro_dampened = False
@@ -156,6 +174,26 @@ class OrderManager:
                     return self._reject(signal, "LOW_CONFIDENCE", "Confidence too low")
             except Exception as e:
                 self.logger.warning(f"ConfidenceEngine error (continuing): {e}")
+
+        # ── Gate 8.5: ML Prediction Alignment ────────────────────
+        if self.ml_predictor:
+            try:
+                ohlcv = self.data_feed.get_ohlcv_arrays(symbol, "15m", limit=200) if self.data_feed else None
+                if ohlcv and len(ohlcv.get("closes", [])) >= 100:
+                    prediction = self.ml_predictor.predict(
+                        ohlcv["closes"], ohlcv["highs"], ohlcv["lows"],
+                        ohlcv.get("volumes", [])
+                    )
+                    if prediction and prediction.get("direction"):
+                        expected_dir = "UP" if direction == "LONG" else "DOWN"
+                        if prediction["direction"] != expected_dir:
+                            signal["confidence"] *= 0.5
+                            signal["ml_conflict"] = True
+                            self.logger.info(f"ML disagrees with {direction} on {symbol} — confidence halved")
+                        else:
+                            signal["ml_agreed"] = True
+            except Exception as e:
+                self.logger.warning(f"ML gate error (continuing): {e}")
 
         # ── Gate 9: Exposure Limits ──────────────────────────────
         if self.exposure_engine:

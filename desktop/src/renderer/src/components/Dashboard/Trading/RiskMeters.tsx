@@ -41,8 +41,11 @@ interface RiskMetersProps {
     atrPercentile?: number;
 }
 
+const MODE_ORDER = ['NORMAL', 'DEFENSIVE', 'CRITICAL', 'HALTED'];
+
 /**
- * Advanced Risk Meters — displays risk mode, drawdown, exposure, and system health.
+ * Advanced Risk Meters -- displays risk mode, drawdown, exposure, and system health.
+ * Enhanced with animated semicircle gauge, mode timeline, and trigger reasons.
  * Accepts both `data` prop (from TradingView) and individual props (direct usage).
  */
 const RiskMeters: React.FC<RiskMetersProps> = (props) => {
@@ -67,6 +70,16 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
     };
 
     const config = modeConfig[mode] || modeConfig.NORMAL;
+
+    // Semicircle gauge values
+    const safeDD = typeof currentDrawdown === 'number' && isFinite(currentDrawdown) ? currentDrawdown : 0;
+    const safeMaxDD = typeof maxDrawdown === 'number' && maxDrawdown > 0 ? maxDrawdown : 0.20;
+    const ddRatio = Math.min(safeDD / safeMaxDD, 1.0);
+    const gaugeRadius = 52;
+    const gaugeStroke = 8;
+    const gaugeCircumference = Math.PI * gaugeRadius; // Half-circle
+    const gaugeFill = ddRatio * gaugeCircumference;
+    const ddColor = ddRatio > 0.7 ? '#FF5252' : ddRatio > 0.4 ? '#FF9800' : '#00E676';
 
     const GaugeBar: React.FC<{ value: number; max: number; label: string; color: string; suffix?: string }> = ({
         value,
@@ -103,6 +116,7 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
     };
 
     const safeRMult = typeof rMultiplier === 'number' && isFinite(rMultiplier) ? rMultiplier : 1.0;
+    const currentModeIdx = MODE_ORDER.indexOf(mode);
 
     return (
         <div
@@ -115,7 +129,7 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
             }}
         >
             {/* Mode Badge */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <span style={{ color: '#90A4AE', fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase' }}>
                     Risk Engine
                 </span>
@@ -139,17 +153,91 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
                 </motion.div>
             </div>
 
+            {/* Mode Transition Timeline */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', marginBottom: '12px', padding: '4px 0' }}>
+                {MODE_ORDER.map((m, i) => {
+                    const mc = modeConfig[m];
+                    const isActive = i <= currentModeIdx;
+                    return (
+                        <React.Fragment key={m}>
+                            <motion.div
+                                initial={{ scale: 0.5 }}
+                                animate={{ scale: isActive ? 1 : 0.7, opacity: isActive ? 1 : 0.25 }}
+                                style={{
+                                    width: i === currentModeIdx ? '10px' : '6px',
+                                    height: i === currentModeIdx ? '10px' : '6px',
+                                    borderRadius: '50%',
+                                    background: mc.color,
+                                    boxShadow: i === currentModeIdx ? `0 0 8px ${mc.color}88` : 'none',
+                                    transition: 'all 0.3s',
+                                }}
+                                title={mc.label}
+                            />
+                            {i < MODE_ORDER.length - 1 && (
+                                <div style={{
+                                    width: '16px', height: '2px',
+                                    background: isActive ? mc.color : 'rgba(255,255,255,0.08)',
+                                    borderRadius: '1px', transition: 'background 0.3s',
+                                }} />
+                            )}
+                        </React.Fragment>
+                    );
+                })}
+            </div>
+
+            {/* Animated Semicircle Drawdown Gauge */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px', position: 'relative' }}>
+                <svg width="130" height="75" viewBox="0 0 130 75" style={{ overflow: 'visible' }}>
+                    {/* Background arc */}
+                    <path
+                        d={`M ${65 - gaugeRadius} 65 A ${gaugeRadius} ${gaugeRadius} 0 0 1 ${65 + gaugeRadius} 65`}
+                        fill="none"
+                        stroke="rgba(255,255,255,0.06)"
+                        strokeWidth={gaugeStroke}
+                        strokeLinecap="round"
+                    />
+                    {/* Filled arc */}
+                    <motion.path
+                        d={`M ${65 - gaugeRadius} 65 A ${gaugeRadius} ${gaugeRadius} 0 0 1 ${65 + gaugeRadius} 65`}
+                        fill="none"
+                        stroke={ddColor}
+                        strokeWidth={gaugeStroke}
+                        strokeLinecap="round"
+                        initial={{ strokeDasharray: `0 ${gaugeCircumference}` }}
+                        animate={{ strokeDasharray: `${gaugeFill} ${gaugeCircumference - gaugeFill}` }}
+                        transition={{ duration: 0.8, ease: 'easeOut' }}
+                        style={{ filter: `drop-shadow(0 0 4px ${ddColor}66)` }}
+                    />
+                </svg>
+                {/* Center text */}
+                <div style={{
+                    position: 'absolute', top: '18px', left: '50%', transform: 'translateX(-50%)',
+                    textAlign: 'center',
+                }}>
+                    <div style={{
+                        fontSize: '22px', fontWeight: 800, fontFamily: 'monospace',
+                        color: ddColor,
+                        lineHeight: 1,
+                    }}>
+                        {(safeDD * 100).toFixed(1)}%
+                    </div>
+                    <div style={{ fontSize: '8px', color: '#546E7A', marginTop: '2px', letterSpacing: '1px' }}>
+                        DRAWDOWN
+                    </div>
+                </div>
+            </div>
+
             {/* R Multiplier */}
             <div style={{
                 textAlign: 'center',
-                marginBottom: '14px',
-                padding: '8px',
+                marginBottom: '10px',
+                padding: '6px',
                 borderRadius: '8px',
                 background: 'rgba(255,255,255,0.02)',
             }}>
                 <div style={{ fontSize: '9px', color: '#546E7A', marginBottom: '2px' }}>R MULTIPLIER</div>
                 <div style={{
-                    fontSize: '24px',
+                    fontSize: '20px',
                     fontWeight: 800,
                     fontFamily: 'monospace',
                     color: safeRMult >= 0.8 ? '#00E676' : safeRMult >= 0.4 ? '#FF9800' : '#FF5252',
@@ -158,7 +246,7 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
                 </div>
             </div>
 
-            {/* Halted Warning */}
+            {/* Halted Warning + Trigger Reasons */}
             {!signalsAllowed && (
                 <div
                     style={{
@@ -169,16 +257,17 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
                         border: '1px solid rgba(255, 23, 68, 0.3)',
                         fontSize: '10px',
                         color: '#FF1744',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
                     }}
                 >
-                    <ShieldOff size={14} />
-                    <div>
-                        <div style={{ fontWeight: 700 }}>SIGNALS BLOCKED</div>
-                        {haltedReason && <div style={{ marginTop: '2px', opacity: 0.7 }}>{haltedReason}</div>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                        <ShieldOff size={14} />
+                        <span style={{ fontWeight: 700 }}>SIGNALS BLOCKED</span>
                     </div>
+                    {haltedReason && (
+                        <div style={{ fontSize: '9px', opacity: 0.8, fontFamily: 'monospace', paddingLeft: '20px' }}>
+                            {haltedReason}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -186,7 +275,7 @@ const RiskMeters: React.FC<RiskMetersProps> = (props) => {
             <GaugeBar
                 value={currentDrawdown}
                 max={maxDrawdown}
-                label="Drawdown"
+                label="Drawdown vs Max"
                 color={currentDrawdown > maxDrawdown * 0.7 ? '#FF5252' : currentDrawdown > maxDrawdown * 0.4 ? '#FF9800' : '#00E676'}
             />
             <GaugeBar

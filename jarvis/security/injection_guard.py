@@ -1,5 +1,5 @@
 """
-INDRA Security — Prompt injection guard.
+INDRA Security -- Prompt injection guard.
 Scans text from external sources (web pages, documents, clipboard) before LLM processing.
 Detects malicious prompts attempting to hijack INDRA's behaviour.
 """

@@ -1,5 +1,5 @@
 """
-INDRA Speaker — Async non-blocking narration queue.
+INDRA Speaker -- Async non-blocking narration queue.
 Executor pushes narration lines here while simultaneously continuing to execute steps.
 INDRA speaks and acts at the same time.
 """
@@ -29,7 +29,7 @@ except Exception as e:
 
 class Speaker:
     """
-    Async audio playback queue. Non-blocking — callers enqueue text and
+    Async audio playback queue. Non-blocking -- callers enqueue text and
     return immediately. A daemon thread consumes the queue and plays audio.
     """
 
@@ -46,7 +46,7 @@ class Speaker:
 
     def enqueue(self, text: str, priority: bool = False):
         """
-        Add text to speech queue. NON-BLOCKING — returns immediately.
+        Add text to speech queue. NON-BLOCKING -- returns immediately.
         
         Args:
             text: Text to speak
@@ -131,7 +131,7 @@ class Speaker:
                 pass
 
         self._current_playing = False
-        logger.info("Speaker: emergency stop — queue cleared, audio stopped")
+        logger.info("Speaker: emergency stop -- queue cleared, audio stopped")
 
     def start(self):
         """Start the playback worker thread."""
