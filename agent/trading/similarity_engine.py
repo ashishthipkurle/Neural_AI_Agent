@@ -148,17 +148,22 @@ class SimilarityEngine:
 
     def query(
         self,
-        segment_key: str,
-        vector: List[float],
+        segment_key: Any,
+        vector: Optional[List[float]] = None,
         k: int = 50,
         timeout_ms: int = 50
     ) -> List[Dict[str, Any]]:
         """
         Query vector with timeout fail-safe.
+        Supports query(segment_key, vector, ...) or query(vector, k=50).
         """
         start_t = time.time()
-        
-        if segment_key not in self._indices:
+
+        if isinstance(segment_key, list) and vector is None:
+            vector = segment_key
+            segment_key = list(self._indices.keys())[0] if self._indices else "default"
+
+        if not vector or segment_key not in self._indices:
             return []
 
         normalized_query = self._l2_normalize(vector)

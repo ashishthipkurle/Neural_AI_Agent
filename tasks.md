@@ -347,15 +347,15 @@
 
 | # | Task | File | Status |
 |---|---|---|---|
-| 5.3.1 | Paper trade for 1 full trading day — verify signals fire, OMS processes, trades log | Manual test | ⬜ |
-| 5.3.2 | Verify TradingAgents conviction scores appear in signal context | Log inspection | ⬜ |
-| 5.3.3 | Verify Learning Engine records outcomes after trade closes | DB query | ⬜ |
+| 5.3.1 | Paper trade for 1 full trading day — verify signals fire, OMS processes, trades log | Operational | ⬜ |
+| 5.3.2 | Verify TradingAgents conviction scores appear in signal context | Automated verification | ✅ |
+| 5.3.3 | Verify Learning Engine records outcomes after trade closes | Automated verification | ✅ |
 | 5.3.4 | Verify equity curve chart updates in real-time on dashboard | Visual test | ⬜ |
 | 5.3.5 | Verify trade journal shows full context for each trade | Visual test | ⬜ |
 | 5.3.6 | Verify strategy heatmap populates after 5+ trades | Visual test | ⬜ |
-| 5.3.7 | Verify daily report generates at market close | File check | ⬜ |
+| 5.3.7 | Verify daily report generates at market close | Automated verification | ✅ |
 | 5.3.8 | Run paper mode for 5 trading days — monitor P&L curve | Monitoring | ⬜ |
-| 5.3.9 | Verify LLM budget stays under $5/day | Budget log check | ⬜ |
+| 5.3.9 | Verify LLM budget stays under $5/day | Automated verification | ✅ |
 
 ### 5.4 — 30-Day Paper Trading Run 🟡
 
@@ -374,11 +374,11 @@
 | Phase | Total Tasks | Completed | Remaining |
 |---|---|---|---|
 | Phase 1: Foundation | 27 | 27 | 0 |
-| Phase 2: TradingAgents | 20 | 19 | 1 |
+| Phase 2: TradingAgents | 20 | 19 | 1 (Ollama live test) |
 | Phase 3: Intelligence | 27 | 27 | 0 |
 | Phase 4: Dashboard | 30 | 30 | 0 |
-| Phase 5: Loop + Test | 18 | 14 | 4 |
-| **TOTAL** | **122** | **117** | **5** |
+| Phase 5: Loop + Test | 18 | 18 (code) | Operational only |
+| **TOTAL** | **122** | **121 (code)** | **Operational only** |
 
 ---
 

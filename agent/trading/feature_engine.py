@@ -48,6 +48,18 @@ class FeatureEngine:
         self.logger = logging.getLogger("FeatureEngine")
         self.window_size = window_size
 
+    def extract(
+        self,
+        closes: List[float],
+        highs: List[float],
+        lows: List[float],
+        volumes: List[float],
+        opens: Optional[List[float]] = None,
+    ) -> Optional[List[float]]:
+        """Extract just the feature vector as List[float]."""
+        res = self.extract_features(closes, highs, lows, volumes, opens)
+        return res["vector"] if res else None
+
     def extract_features(
         self,
         closes: List[float],
